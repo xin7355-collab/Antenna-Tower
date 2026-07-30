@@ -56,17 +56,14 @@
         const selected = ent.id === state.selectedId;
         let m = this.markers.get(ent.id);
         if (!m) {
+          // 不可拖曳：避免在地圖上滑動時誤拖站台。移動位置請用定位/貼上座標/編輯移動。
           m = L.marker([ent.lat, ent.lng], {
             icon: divIcon(L, ent, selected),
-            draggable: ent.type !== 'peak',
+            draggable: false,
           }).addTo(this.map);
           m.on('click', (e) => {
             L.DomEvent.stopPropagation(e);
             if (this.h.onSelect) this.h.onSelect(ent.id);
-          });
-          m.on('dragend', () => {
-            const ll = m.getLatLng();
-            if (this.h.onMove) this.h.onMove(ent.id, ll.lat, ll.lng);
           });
           this.markers.set(ent.id, m);
         } else {
