@@ -35,6 +35,20 @@
     mapView.render(state);
     arView.render(state);
     renderPanel();
+    updateCoverage();
+  }
+
+  // 依無線電視距畫各站台涵蓋圈（假設對方天線高 RX_H 公尺）
+  const RX_H = 10;
+  function updateCoverage() {
+    if (!mapView.setCoverage) return;
+    if (!state.settings.showCoverage) { mapView.setCoverage([]); return; }
+    const circles = state.stations.map((st) => ({
+      lat: st.lat, lng: st.lng,
+      radiusM: (Geo.radioHorizonKm((st.alt || 0) + (st.antenna || 0)) + Geo.radioHorizonKm(RX_H)) * 1000,
+      color: st.id === state.selectedId ? '#2f6fff' : '#35d07f',
+    }));
+    mapView.setCoverage(circles);
   }
 
   // ---- 選取目標並計算 ----------------------------------------------------
@@ -184,6 +198,7 @@
   // ---- 設定與工具列 ------------------------------------------------------
   function bindControls() {
     document.getElementById('opt-curv').onchange = (e) => { state.settings.withCurvature = e.target.checked; render(); };
+    document.getElementById('opt-cov').onchange = (e) => { state.settings.showCoverage = e.target.checked; updateCoverage(); };
     document.getElementById('opt-freq').onchange = (e) => {
       state.settings.freqMHz = parseFloat(e.target.value) || 145.7;
       if (state.selectedId) select(state.selectedId);
@@ -256,7 +271,7 @@
         throw new Error('Leaflet 未載入');
       }
     } catch (err) {
-      mapView = { render() {}, drawPath() {}, clearPath() {}, focus() {}, map: { invalidateSize() {} } };
+      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, focus() {}, map: { invalidateSize() {} } };
       const el = document.getElementById('map');
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }

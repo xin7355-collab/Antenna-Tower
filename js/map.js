@@ -30,7 +30,7 @@
       this.h = handlers;
       this.markers = new Map();
       this.pathLayer = null;
-      this.fresnelLayer = null;
+      this.coverageLayer = null;
 
       const L = global.L;
       this.L = L;
@@ -110,6 +110,25 @@
 
     clearPath() {
       if (this.pathLayer) { this.map.removeLayer(this.pathLayer); this.pathLayer = null; }
+    }
+
+    /**
+     * 顯示涵蓋範圍圈。circles = [{lat, lng, radiusM, color}]；傳空陣列即清除。
+     */
+    setCoverage(circles) {
+      if (this.coverageLayer) { this.map.removeLayer(this.coverageLayer); this.coverageLayer = null; }
+      if (!circles || !circles.length) return;
+      const L = this.L;
+      const layers = circles.map((c) =>
+        L.circle([c.lat, c.lng], {
+          radius: c.radiusM,
+          color: c.color || '#35d07f',
+          weight: 1,
+          fillColor: c.color || '#35d07f',
+          fillOpacity: 0.08,
+        })
+      );
+      this.coverageLayer = L.layerGroup(layers).addTo(this.map);
     }
 
     focus(ent) {
