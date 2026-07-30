@@ -108,19 +108,38 @@
     }
 
     async toggleCamera() {
+      // 關閉相機：停止串流、恢復天空/地面背景
       if (this.$cam.style.display !== 'none') {
         this.$cam.style.display = 'none';
+        this.root.classList.remove('ar-cam-on');
         if (this.$cam.srcObject) this.$cam.srcObject.getTracks().forEach((t) => t.stop());
         return;
       }
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' }, audio: false,
-        });
+        // 優先用後鏡頭；不支援時退回任一相機
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' } }, audio: false,
+          });
+        } catch (_) {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
         this.$cam.srcObject = stream;
+        this.$cam.setAttribute('playsinline', '');
         await this.$cam.play();
         this.$cam.style.display = 'block';
-      } catch (err) { alert('無法開啟相機（需 HTTPS 與授權）'); }
+        // 讓相機透出來：隱藏不透明的天空/地面漸層，只留地平線/羅盤/標籤
+        this.root.classList.add('ar-cam-on');
+        this._paint();
+      } catch (err) {
+        const msg = (err && err.name === 'NotAllowedError')
+          ? '相機權限被拒。請在瀏覽器網址列的權限設定允許「相機」後再試。'
+          : (location.protocol !== 'https:'
+              ? '相機需要 HTTPS。請用 https 的網址開啟。'
+              : '無法開啟相機：' + (err && err.message ? err.message : err));
+        alert(msg);
+      }
     }
 
     render(state) { this.state = state; this._paint(); }
