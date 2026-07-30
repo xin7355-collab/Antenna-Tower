@@ -103,6 +103,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .mk-lbl { font-size: 11px; background: rgba(0,0,0,.6); color: #fff; padding: 1px 5px; border-radius: 4px; }
 .mk-sel .mk-lbl { background: #2f6fff; }
 .mk-peak .mk-lbl { background: rgba(90,70,40,.7); }
+.mk-sat .mk-lbl { background: rgba(20,80,60,.85); color: #7dffcf; }
+.mk-sat .mk-ico { font-size: 22px; }
 
 /* ===== AR 視角 ===== */
 #view-ar { background: #0b0f14; cursor: grab; user-select: none; }

@@ -211,6 +211,13 @@
     if (!target || target.type === 'me') return;
 
     const info = document.getElementById('los-status');
+    // 目標與我幾乎重疊：距離趨近 0，路徑分析無意義（會算出 NaN），直接提示
+    if (Geo.distance(state.me, target) < 30) {
+      info.innerHTML = '<span class="warn">此目標幾乎就在我的位置上（距離趨近 0），無法做路徑分析。<br>' +
+        '請用「移動」把它移到別處，或選其他目標。</span>';
+      mapView.clearPath();
+      return;
+    }
     info.textContent = '⏳ 取得地形剖面中…';
     try {
       const profile = await Elevation.buildProfile(state.me, target, 96);
@@ -451,7 +458,7 @@
   }
 
   // 衛星（ISS）：每 5 秒抓即時位置換算方位/仰角
-  let satTimer = null;
+  let satTimer = null, satJustOn = false;
   async function fetchISS() {
     try {
       const r = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
@@ -463,13 +470,28 @@
         az: la.az, alt: la.el, rangeKm: la.rangeKm,
         subLat: j.latitude, subLng: j.longitude,
       }];
-    } catch (_) { state.satellites = []; }
+      // 狀態提示：即使在地平線下也告訴使用者它在哪
+      if (state.settings.showSat) {
+        if (la.el >= 0) {
+          setSkyHint(`🛰 ISS 在地平線上！往 方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}° 看（距離 ${Math.round(la.rangeKm)} km）`);
+          if (satJustOn) { showARTab(); if (arView) arView.lookAt(la.az, Math.max(0, la.el)); satJustOn = false; }
+        } else {
+          setSkyHint(`🛰 ISS 目前在地平線下（方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}°）——過境時才看得到；地圖上有它現在的地表位置`);
+          satJustOn = false;
+        }
+      }
+      if (mapView.setSatellite) mapView.setSatellite({ lat: j.latitude, lng: j.longitude, name: '🛰 ISS', alt: la.el });
+    } catch (_) {
+      state.satellites = [];
+      if (state.settings.showSat) setSkyHint('🛰 無法取得 ISS 位置（網路或服務暫時擋住），稍後會自動再試');
+    }
     if (arView) arView.render(state);
   }
   function satTicker() {
-    if (state.settings.showSat && !satTimer) { fetchISS(); satTimer = setInterval(fetchISS, 5000); }
+    if (state.settings.showSat && !satTimer) { satJustOn = true; fetchISS(); satTimer = setInterval(fetchISS, 5000); }
     if (!state.settings.showSat && satTimer) {
       clearInterval(satTimer); satTimer = null; state.satellites = [];
+      if (mapView.setSatellite) mapView.setSatellite(null);
       if (arView) arView.render(state);
     }
   }
@@ -689,7 +711,7 @@
         throw new Error('Leaflet 未載入');
       }
     } catch (err) {
-      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, focus() {}, map: { invalidateSize() {} } };
+      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, setSatellite() {}, focus() {}, map: { invalidateSize() {} } };
       const el = document.getElementById('map');
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }

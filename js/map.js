@@ -133,6 +133,24 @@
     }
 
     /**
+     * 顯示衛星（ISS）當前地表位置。傳 null 即清除。
+     */
+    setSatellite(pos) {
+      if (this.satMarker) { this.map.removeLayer(this.satMarker); this.satMarker = null; }
+      if (!pos) return;
+      const L = this.L;
+      this.satMarker = L.marker([pos.lat, pos.lng], {
+        icon: L.divIcon({
+          className: 'mk-wrap',
+          html: `<div class="mk mk-sat"><span class="mk-ico">🛰</span>` +
+                `<span class="mk-lbl">${pos.name || 'ISS'} (${pos.alt >= 0 ? '地平線上' : '地平線下'})</span></div>`,
+          iconAnchor: [0, 0],
+        }),
+        interactive: false,
+      }).addTo(this.map);
+    }
+
+    /**
      * 顯示地形感知涵蓋多邊形。latlngs = [[lat,lng],...]；傳 null 即清除。
      */
     setViewshed(latlngs, color = '#f5b942') {
