@@ -392,10 +392,15 @@
       const reader = new FileReader();
       reader.onload = () => {
         try {
-          const d = JSON.parse(reader.result);
-          if (d.me) Object.assign(state.me, d.me);
-          if (Array.isArray(d.stations)) state.stations = d.stations;
-          if (d.settings) Object.assign(state.settings, d.settings);
+          const d = Parse.parseStations(reader.result, file.name);
+          if (!d.stations || !d.stations.length) throw new Error('找不到可匯入的站台');
+          if (d.mode === 'replace') {
+            if (d.me) Object.assign(state.me, d.me);
+            state.stations = d.stations;
+            if (d.settings) Object.assign(state.settings, d.settings);
+          } else {
+            state.stations = state.stations.concat(d.stations); // CSV/GPX 追加
+          }
           state.analysisById = {};
           state.selectedId = null;
           saveState();
@@ -403,7 +408,8 @@
           mapView.clearPath();
           render();
           if (mapView.focus) mapView.focus(state.me);
-        } catch (err) { alert('匯入失敗：JSON 格式錯誤'); }
+          alert(`已匯入 ${d.stations.length} 個站台（${d.mode === 'replace' ? '取代' : '追加'}）`);
+        } catch (err) { alert('匯入失敗：' + err.message); }
       };
       reader.readAsText(file);
       fileInput.value = '';
