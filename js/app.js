@@ -191,6 +191,10 @@
     const marginCls = margin >= 10 ? 'ok' : margin >= 0 ? 'marg' : 'bad';
     rows.push(`<div class="sub">路徑損耗：${a.totalLoss.toFixed(1)} dB` +
       `（自由空間 ${a.fspl.toFixed(1)} + 繞射 ${a.diffractionLoss.toFixed(1)}）</div>`);
+    if (a.diffractionMulti != null) {
+      rows.push(`<div class="sub">繞射：單刃 ${a.diffractionSingle.toFixed(1)} dB / ` +
+        `Deygout多刃 ${a.diffractionMulti.toFixed(1)} dB</div>`);
+    }
     rows.push(`<div class="sub ${marginCls}">連結餘裕：${margin >= 0 ? '+' : ''}${margin.toFixed(1)} dB` +
       `（接收約 ${rxPower.toFixed(0)} dBm / 靈敏度 ${sens} dBm）</div>`);
     rows.push(`<div class="sub">理論無線電視距上限：約 ${horizon.toFixed(0)} km</div>`);
