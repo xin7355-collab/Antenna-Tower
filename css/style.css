@@ -26,7 +26,12 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 
 .paste-row { display: flex; gap: 6px; margin-top: 8px; }
 .paste-row input { flex: 1; min-width: 0; background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
-.paste-row button { background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.paste-btns { display: flex; gap: 6px; margin-top: 6px; }
+.paste-btns button { flex: 1; border: 0; border-radius: 6px; padding: 6px; font-size: 12px; cursor: pointer; }
+.paste-btns #btn-paste { background: #2f6fff; color: #fff; }
+.paste-btns #btn-addstation { background: #26344a; color: #cfe0f5; border: 1px solid #33507a; }
+.aim-hint { font-size: 12px; color: #ffe27a; line-height: 1.5; margin-bottom: 6px; }
+.aim-hint:empty { display: none; }
 .data-btns { display: flex; gap: 6px; margin-top: 8px; }
 .data-btns button { flex: 1; background: #222a35; color: #cdd6df; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
 .data-btns button:hover { background: #2a323d; }

@@ -32,7 +32,10 @@
         <div id="me-coord" class="me-coord"></div>
         <div class="paste-row">
           <input id="paste-coord" type="text" placeholder="貼上座標（任何格式，如 23°28'N 120°57'E）" />
-          <button id="btn-paste">套用</button>
+        </div>
+        <div class="paste-btns">
+          <button id="btn-paste" title="把座標設為我的位置">📍 設為我的位置</button>
+          <button id="btn-addstation" title="用座標新增一個標點/站台">➕ 新增站台</button>
         </div>
         <div class="data-btns">
           <button id="btn-export" title="匯出站台資料 JSON">匯出</button>
@@ -89,6 +92,7 @@
 
       <div class="los-box">
         <div class="los-title">路徑分析</div>
+        <div id="aim-hint" class="aim-hint"></div>
         <div id="los-status" class="los-status">選一個站台開始…</div>
         <canvas id="profile" class="profile"></canvas>
         <div class="legend">

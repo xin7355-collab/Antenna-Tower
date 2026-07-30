@@ -169,13 +169,19 @@
   async function select(id) {
     state.selectedId = id;
     const target = findEntity(id);
-    // AR 視角轉向面對選定目標（像照片那樣把目標置中）
+    // AR 視角轉向面對選定目標，並顯示「往哪個方位/仰角看」的對準提示
+    const aimEl = document.getElementById('aim-hint');
     if (target && target.type !== 'me' && arView) {
       const brg = Geo.bearing(state.me, target);
       const dist = Geo.distance(state.me, target);
       const obsAlt = (state.me.alt || 0) + (state.me.antenna || 0);
       const elev = Geo.elevationAngle(obsAlt, target.alt, dist, state.settings.withCurvature, state.settings.k);
       arView.lookAt(brg, Math.max(0, elev));
+      if (aimEl) aimEl.innerHTML =
+        `🎯 <b>${target.name}</b>：AR 中往 <b>方位 ${Math.round(brg)}° ${Geo.compass8(brg)}</b>、` +
+        `仰角 ${elev.toFixed(1)}° 看　·　距離 ${Geo.fmtDistance(dist)}`;
+    } else if (aimEl) {
+      aimEl.innerHTML = '';
     }
     render();
     if (!target || target.type === 'me') return;
@@ -551,6 +557,25 @@
     };
     document.getElementById('btn-paste').onclick = applyPaste;
     document.getElementById('paste-coord').onkeydown = (e) => { if (e.key === 'Enter') applyPaste(); };
+
+    // 用座標新增一個標點/站台（不動我的位置）
+    document.getElementById('btn-addstation').onclick = () => {
+      const inp = document.getElementById('paste-coord');
+      const ll = Parse.parseLatLng(inp.value);
+      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增站台」'); return; }
+      const name = prompt('新站台名稱：', '新標點');
+      if (name == null) return;
+      const st = { id: `st-${Date.now()}`, type: 'station', name: name || '新標點', lat: ll.lat, lng: ll.lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz };
+      state.stations.push(st);
+      inp.value = '';
+      saveState();
+      render();
+      select(st.id);              // 選取並對準
+      if (mapView.focus) mapView.focus(st);
+      Elevation.elevationAt(st).then((e) => {
+        if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
+      }).catch(() => {});
+    };
 
     document.getElementById('btn-locate').onclick = () => {
       if (!navigator.geolocation) return alert('此裝置不支援定位');
