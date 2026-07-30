@@ -266,6 +266,21 @@
         this.$ecliptic.innerHTML = '';
       }
 
+      // 1c) 衛星（如 ISS）— 獨立於天空開關
+      if (st.satellites && st.satellites.length) {
+        st.satellites.forEach((o) => {
+          if (o.alt < -2 || Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
+          const selected = o.id === st.selectedId;
+          cand.push({
+            id: o.id, name: o.name, kind: 'sky-sat', selected, stick: false,
+            x: projX(o.az), y: projY(o.alt),
+            sub: `仰角 ${o.alt.toFixed(0)}° · ${Math.round(o.rangeKm)} km`,
+            prio: (selected ? 1e9 : 0) + 3e5,
+            readout: () => this._skyReadout(o), color: '#7dffcf',
+          });
+        });
+      }
+
       // 2) 去重疊：依優先權放置，水平與垂直都接近才視為重疊
       const placed = [];
       cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
@@ -341,6 +356,7 @@
     _skyReadout(o) {
       const typeName = { sun: '太陽', moon: '月亮', planet: '行星', star: '恆星', sat: '衛星' }[o.type] || '';
       const extra = (o.type === 'moon' && o.illum != null) ? `　照明 ${Math.round(o.illum * 100)}%`
+        : (o.type === 'sat' && o.rangeKm != null) ? `　距離 ${Math.round(o.rangeKm)} km`
         : (o.mag != null ? `　星等 ${o.mag}` : '');
       return `<div class="ro-name">${o.name}</div>` +
         `<div class="ro-line">方位：${Math.round(o.az)}° ${Geo.compass8(o.az)}　仰角：${o.alt.toFixed(1)}°</div>` +

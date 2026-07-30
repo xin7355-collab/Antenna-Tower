@@ -190,8 +190,41 @@
     return waxing ? '🌔' : '🌖';
   }
 
+  // 地理座標(WGS84) → ECEF (m)
+  function geodeticToEcef(lat, lng, h) {
+    const a = 6378137, e2 = 0.00669437999014;
+    const N = a / Math.sqrt(1 - e2 * sin(lat) * sin(lat));
+    return {
+      x: (N + h) * cos(lat) * cos(lng),
+      y: (N + h) * cos(lat) * sin(lng),
+      z: (N * (1 - e2) + h) * sin(lat),
+    };
+  }
+
+  /**
+   * 從觀測者看目標（如衛星）的方位/仰角。
+   * @param obs {lat,lng,alt(m)}   @param tgt {lat,lng,altKm}
+   * @returns {az, el, rangeKm}
+   */
+  function lookAngles(obs, tgt) {
+    const o = geodeticToEcef(obs.lat, obs.lng, obs.alt || 0);
+    const t = geodeticToEcef(tgt.lat, tgt.lng, (tgt.altKm || 0) * 1000);
+    const dx = t.x - o.x, dy = t.y - o.y, dz = t.z - o.z;
+    const φ = obs.lat, λ = obs.lng;
+    const e = -sin(λ) * dx + cos(λ) * dy;
+    const n = -sin(φ) * cos(λ) * dx - sin(φ) * sin(λ) * dy + cos(φ) * dz;
+    const u = cos(φ) * cos(λ) * dx + cos(φ) * sin(λ) * dy + sin(φ) * dz;
+    const range = Math.sqrt(e * e + n * n + u * u);
+    return {
+      az: norm360(atan2(e, n)),
+      el: asin(u / range),
+      rangeKm: range / 1000,
+    };
+  }
+
   global.Sky = {
     skyObjects, eclipticPath, julianDate, gmst, lst, obliquity,
-    sunEqu, moonEqu, planetEqu, equToHor, eclToEqu, PLANETS, STARS,
+    sunEqu, moonEqu, planetEqu, equToHor, eclToEqu, geodeticToEcef, lookAngles,
+    PLANETS, STARS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

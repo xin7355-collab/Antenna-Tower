@@ -16,6 +16,7 @@
     stations: S.stations.map((s) => ({ ...s })),
     peaks: S.peaks.map((p) => ({ ...p })),
     selectedId: null,
+    satellites: [],            // 即時衛星（ISS）方位仰角
     analysisById: {},          // id -> analyzePath 結果（快取）
     settings: {
       freqMHz: 145.7, obsAntenna: 3, tgtAntenna: 6, k: Geo.K_DEFAULT, withCurvature: true,
@@ -25,6 +26,7 @@
       showSky: false,   // 天文疊加層
       skyTime: null,    // null=現在；否則 ISO 字串
       starMag: 2.2,     // 顯示星等上限
+      showSat: false,   // 衛星（ISS）
     },
   };
 
@@ -372,7 +374,9 @@
     chk('opt-curv', state.settings.withCurvature);
     chk('opt-cov', !!state.settings.showCoverage);
     chk('opt-sky', !!state.settings.showSky);
+    chk('opt-sat', !!state.settings.showSat);
     skyTicker();
+    satTicker();
   }
 
   // 天空顯示「現在」時，每 20 秒自動更新一次天體位置
@@ -381,6 +385,30 @@
     const live = state.settings.showSky && !state.settings.skyTime;
     if (live && !skyTimer) skyTimer = setInterval(() => arView && arView.render(state), 20000);
     if (!live && skyTimer) { clearInterval(skyTimer); skyTimer = null; }
+  }
+
+  // 衛星（ISS）：每 5 秒抓即時位置換算方位/仰角
+  let satTimer = null;
+  async function fetchISS() {
+    try {
+      const r = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
+      if (!r.ok) throw new Error('ISS API ' + r.status);
+      const j = await r.json();
+      const la = Sky.lookAngles(state.me, { lat: j.latitude, lng: j.longitude, altKm: j.altitude });
+      state.satellites = [{
+        id: 'iss', name: '🛰 ISS', type: 'sat',
+        az: la.az, alt: la.el, rangeKm: la.rangeKm,
+        subLat: j.latitude, subLng: j.longitude,
+      }];
+    } catch (_) { state.satellites = []; }
+    if (arView) arView.render(state);
+  }
+  function satTicker() {
+    if (state.settings.showSat && !satTimer) { fetchISS(); satTimer = setInterval(fetchISS, 5000); }
+    if (!state.settings.showSat && satTimer) {
+      clearInterval(satTimer); satTimer = null; state.satellites = [];
+      if (arView) arView.render(state);
+    }
   }
 
   // ---- 設定與工具列 ------------------------------------------------------
@@ -400,6 +428,7 @@
       saveState(); render();
     };
     document.getElementById('opt-starmag').onchange = (e) => { state.settings.starMag = parseFloat(e.target.value); saveState(); render(); };
+    document.getElementById('opt-sat').onchange = (e) => { state.settings.showSat = e.target.checked; saveState(); satTicker(); };
     document.getElementById('opt-freq').onchange = (e) => {
       state.settings.freqMHz = parseFloat(e.target.value) || 145.7;
       if (state.selectedId) select(state.selectedId);
