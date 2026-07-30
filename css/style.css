@@ -24,6 +24,9 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .me-title button { margin-left: auto; background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .me-coord { font-size: 12px; color: #9fb0c0; margin-top: 6px; }
 
+.paste-row { display: flex; gap: 6px; margin-top: 8px; }
+.paste-row input { flex: 1; min-width: 0; background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.paste-row button { background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
 .data-btns { display: flex; gap: 6px; margin-top: 8px; }
 .data-btns button { flex: 1; background: #222a35; color: #cdd6df; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
 .data-btns button:hover { background: #2a323d; }
@@ -94,6 +97,11 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 /* ===== AR / VR 視角 ===== */
 #view-ar { background: #0b0f14; cursor: grab; user-select: none; }
 #view-ar:active { cursor: grabbing; }
+.ar-scene, .ar-scene-clone { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; overflow: hidden; }
+.ar-scene-clone { display: none; }
+/* VR 雙眼分割：左右各半，放進 Cardboard 眼鏡即為 VR */
+.ar-vr .ar-scene { width: 50%; }
+.ar-vr .ar-scene-clone { display: block; left: 50%; width: 50%; border-left: 1px solid #000; }
 .ar-cam { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
 .ar-sky { position: absolute; left: 0; right: 0; top: 0; background: linear-gradient(#3a5a80, #9fb6c9); z-index: 1; }
 .ar-ground { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(#2f3a2a, #1a1f16); z-index: 1; }

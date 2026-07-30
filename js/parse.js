@@ -79,6 +79,73 @@
     return out;
   }
 
+  // ---- 萬用座標解析 ----------------------------------------------------
+  // 支援：十進位、度分秒(DMS)、度分(DDM)、N/S/E/W、°′″ 各種符號、
+  //       逗號或空白分隔、貼上整串（含 Google Maps 格式）。
+
+  // 解析單一座標分量（可含半球字母），回傳十進位度數或 null
+  function parseCoordComponent(str) {
+    if (str == null) return null;
+    let s = String(str).trim().toUpperCase()
+      .replace(/[°˚º]/g, ' ').replace(/[’'′`]/g, ' ').replace(/[”"″]/g, ' ');
+    if (!s) return null;
+    let sign = 1;
+    const hemi = s.match(/[NSEW]/);
+    if (hemi) { if (hemi[0] === 'S' || hemi[0] === 'W') sign = -1; s = s.replace(/[NSEW]/g, ' '); }
+    if (/^\s*-/.test(s)) sign = -1;
+    const nums = s.match(/\d+(?:\.\d+)?/g);
+    if (!nums || !nums.length) return null;
+    const d = parseFloat(nums[0]) || 0;
+    const m = nums[1] ? parseFloat(nums[1]) : 0;
+    const sec = nums[2] ? parseFloat(nums[2]) : 0;
+    return sign * (d + m / 60 + sec / 3600);
+  }
+
+  // 解析一對座標，回傳 {lat, lng} 或 null
+  function parseLatLng(str) {
+    if (str == null) return null;
+    const norm = String(str).trim()
+      .replace(/[°˚º]/g, ' ').replace(/[’'′`]/g, ' ').replace(/[”"″]/g, ' ');
+    if (!norm) return null;
+
+    // 有半球字母：先判斷是「數字在前」(23.47N) 還是「字母在前」(N23.47)
+    if (/[NSEW]/i.test(norm)) {
+      const letters = [];
+      norm.replace(/[NSEW]/gi, (ch, i) => { letters.push({ l: ch.toUpperCase(), i }); return ch; });
+      const allBefore = letters.every((o) => /\d\s*$/.test(norm.slice(0, o.i)));
+      const allAfter = letters.every((o) => /^\s*-?\d/.test(norm.slice(o.i + 1)));
+      const side = allBefore ? 'before' : (allAfter ? 'after' : null);
+      const numRe = /(-?\d[\d.]*(?:\s+\d[\d.]*){0,2})/;
+      const grab = (set) => {
+        const o = letters.find((x) => set.includes(x.l));
+        if (!o || !side) return null;
+        let m;
+        if (side === 'before') m = norm.slice(0, o.i).match(new RegExp(numRe.source + '\\s*$'));
+        else m = norm.slice(o.i + 1).match(new RegExp('^\\s*' + numRe.source));
+        if (!m) return null;
+        const p = m[1].trim().split(/\s+/).map(parseFloat);
+        let v = (Math.abs(p[0]) || 0) + (p[1] || 0) / 60 + (p[2] || 0) / 3600;
+        if (o.l === 'S' || o.l === 'W' || p[0] < 0) v = -Math.abs(v);
+        return v;
+      };
+      const lat = grab(['N', 'S']), lng = grab(['E', 'W']);
+      if (lat != null && lng != null) return clampLL(lat, lng);
+    }
+
+    // 純十進位一對（逗號或空白分隔）
+    const nums = norm.match(/-?\d+(?:\.\d+)?/g);
+    if (nums && nums.length >= 2) {
+      return clampLL(parseFloat(nums[0]), parseFloat(nums[1]));
+    }
+    return null;
+  }
+
+  function clampLL(lat, lng) {
+    if (!isFinite(lat) || !isFinite(lng)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { lat, lng };
+  }
+
   function parseStations(text, filename = '') {
     const t = text.trim();
     const fn = filename.toLowerCase();
@@ -93,5 +160,5 @@
     return { stations: parseCSV(t), mode: 'append' };
   }
 
-  global.Parse = { parseStations, parseCSV, parseGPX };
+  global.Parse = { parseStations, parseCSV, parseGPX, parseLatLng, parseCoordComponent };
 })(typeof window !== 'undefined' ? window : globalThis);

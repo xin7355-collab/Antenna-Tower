@@ -30,47 +30,81 @@
 
     _build() {
       this.root.innerHTML = `
-        <video class="ar-cam" playsinline muted style="display:none"></video>
-        <div class="ar-sky"></div>
-        <div class="ar-ground"></div>
-        <div class="ar-horizon"></div>
-        <div class="ar-compass"></div>
-        <div class="ar-labels"></div>
-        <svg class="ar-aim" preserveAspectRatio="none"></svg>
-        <div class="ar-crosshair">+</div>
+        <div class="ar-scene">
+          <video class="ar-cam" playsinline muted style="display:none"></video>
+          <div class="ar-sky"></div>
+          <div class="ar-ground"></div>
+          <div class="ar-horizon"></div>
+          <div class="ar-compass"></div>
+          <div class="ar-labels"></div>
+          <svg class="ar-aim" preserveAspectRatio="none"></svg>
+          <div class="ar-crosshair">+</div>
+        </div>
+        <div class="ar-scene-clone" aria-hidden="true"></div>
         <div class="ar-readout"></div>
         <div class="ar-controls">
           <button data-act="sensor" title="使用手機羅盤">🧭 羅盤</button>
           <button data-act="camera" title="開啟相機背景">📷 相機</button>
-          <span class="ar-hint">桌機：拖曳畫面轉動視角</span>
+          <button data-act="full" title="全螢幕">⛶ 全螢幕</button>
+          <button data-act="vr" title="VR 雙眼分割（放進 Cardboard 眼鏡）">🥽 VR</button>
+          <span class="ar-hint">拖曳轉視角・點山對準</span>
         </div>`;
+      this.$scene = this.root.querySelector('.ar-scene');
+      this.$clone = this.root.querySelector('.ar-scene-clone');
       this.$sky = this.root.querySelector('.ar-sky');
       this.$labels = this.root.querySelector('.ar-labels');
       this.$compass = this.root.querySelector('.ar-compass');
       this.$aim = this.root.querySelector('.ar-aim');
       this.$readout = this.root.querySelector('.ar-readout');
       this.$cam = this.root.querySelector('.ar-cam');
+      this.vr = false;
 
-      // 桌機拖曳
-      let drag = null;
-      const down = (x, y) => (drag = { x, y, h: this.heading, p: this.pitch });
+      // 桌機拖曳 + 點擊對準
+      let drag = null, moved = 0;
+      const down = (x, y) => { drag = { x, y, h: this.heading, p: this.pitch }; moved = 0; };
       const move = (x, y) => {
-        if (!drag || this.usingSensor) return;
+        if (!drag) return;
+        moved = Math.max(moved, Math.hypot(x - drag.x, y - drag.y));
+        if (this.usingSensor) return;
         const w = this.root.clientWidth, hgt = this.root.clientHeight;
         this.heading = (drag.h - ((x - drag.x) / w) * HFOV + 360) % 360;
         this.pitch = Math.max(-40, Math.min(60, drag.p + ((y - drag.y) / hgt) * VFOV));
         this._paint();
       };
-      const up = () => (drag = null);
+      const up = (x, y) => {
+        if (drag && moved < 8 && x != null) this._tap(x, y); // 幾乎沒移動 = 點擊
+        drag = null;
+      };
       this.root.addEventListener('mousedown', (e) => down(e.clientX, e.clientY));
       window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
-      window.addEventListener('mouseup', up);
+      window.addEventListener('mouseup', (e) => up(e.clientX, e.clientY));
       this.root.addEventListener('touchstart', (e) => { const t = e.touches[0]; down(t.clientX, t.clientY); }, { passive: true });
       this.root.addEventListener('touchmove', (e) => { const t = e.touches[0]; move(t.clientX, t.clientY); }, { passive: true });
-      this.root.addEventListener('touchend', up);
+      this.root.addEventListener('touchend', (e) => { const t = e.changedTouches[0]; up(t.clientX, t.clientY); });
 
       this.root.querySelector('[data-act="sensor"]').onclick = () => this.enableSensor();
       this.root.querySelector('[data-act="camera"]').onclick = () => this.toggleCamera();
+      this.root.querySelector('[data-act="full"]').onclick = () => this.toggleFullscreen();
+      this.root.querySelector('[data-act="vr"]').onclick = () => this.toggleVR();
+      document.addEventListener('fullscreenchange', () => setTimeout(() => this._paint(), 100));
+    }
+
+    toggleFullscreen() {
+      const el = this.root;
+      if (!document.fullscreenElement) {
+        (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el);
+      } else {
+        (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
+      }
+    }
+
+    // VR 雙眼分割：把畫面左右各顯示一次，放進 Cardboard 眼鏡即成 VR
+    toggleVR() {
+      this.vr = !this.vr;
+      this.root.classList.toggle('ar-vr', this.vr);
+      if (this.vr && !document.fullscreenElement) this.toggleFullscreen();
+      if (!this.vr) this.$clone.innerHTML = '';
+      this._paint();
     }
 
     async enableSensor() {
@@ -144,6 +178,18 @@
 
     render(state) { this.state = state; this._paint(); }
 
+    /** 點擊 AR 畫面：選取離觸點最近的可見目標並對準它。 */
+    _tap(clientX, clientY) {
+      const r = this.root.getBoundingClientRect();
+      const x = clientX - r.left, y = clientY - r.top;
+      let best = null, bd = Infinity;
+      (this._placed || []).forEach((c) => {
+        const d = Math.hypot(c.x - x, c.y - y);
+        if (d < bd) { bd = d; best = c; }
+      });
+      if (best && bd < 110 && this.h.onSelect) this.h.onSelect(best.t.id);
+    }
+
     /** 程式化轉向面對某方位/仰角（選取目標時用；感測器模式下不干預）。 */
     lookAt(bearingDeg, pitchDeg) {
       if (this.usingSensor) return;
@@ -156,7 +202,9 @@
       if (!this.state) return;
       const st = this.state;
       const me = st.me;
-      const W = this.root.clientWidth, H = this.root.clientHeight;
+      const H = this.root.clientHeight;
+      // VR 模式下每隻眼睛只有半個寬度
+      const W = this.vr ? this.root.clientWidth / 2 : this.root.clientWidth;
 
       // 天空/地面：地平線隨俯仰角上下移動
       const horizonY = H / 2 + (this.pitch / (VFOV / 2)) * (H / 2);
@@ -215,8 +263,19 @@
       this.$labels.querySelectorAll('.arlbl').forEach((el) => {
         el.onclick = () => this.h.onSelect && this.h.onSelect(el.dataset.id);
       });
+      this._placed = placed; // 供點擊對準用
 
       this._paintAim(aim, W, H, horizonY);
+
+      // VR：把整個場景複製到右眼；相機串流共用同一來源
+      if (this.vr) {
+        this.$clone.innerHTML = this.$scene.innerHTML;
+        const camB = this.$clone.querySelector('.ar-cam');
+        if (camB && this.$cam.srcObject) {
+          camB.srcObject = this.$cam.srcObject;
+          camB.play().catch(() => {});
+        }
+      }
     }
 
     _paintCompass(W, horizonY) {

@@ -82,7 +82,20 @@
     el.querySelectorAll('input[data-f]').forEach((inp) => {
       inp.onchange = () => {
         const f = inp.dataset.f;
-        t[f] = (f === 'name') ? inp.value : parseFloat(inp.value);
+        if (f === 'name') {
+          t.name = inp.value;
+        } else if (f === 'lat' || f === 'lng') {
+          // 若貼上的是「整對」座標，兩欄一起設；否則解析單一分量（支援 DMS）
+          const pair = Parse.parseLatLng(inp.value);
+          if (pair && /[,nsewNSEW]/.test(inp.value) && /\d.*[\s,].*\d/.test(inp.value.replace(/[°'"]/g, ''))) {
+            t.lat = pair.lat; t.lng = pair.lng;
+          } else {
+            const v = Parse.parseCoordComponent(inp.value);
+            if (v != null) t[f] = v;
+          }
+        } else {
+          t[f] = parseFloat(inp.value);
+        }
         state.analysisById = {};        // 資料改變，重算
         saveState();
         render();
@@ -428,6 +441,22 @@
     };
 
     document.getElementById('btn-analyze-all').onclick = () => analyzeAll();
+
+    // 萬用座標：貼上任何格式套用到我的位置
+    const applyPaste = async () => {
+      const inp = document.getElementById('paste-coord');
+      const ll = Parse.parseLatLng(inp.value);
+      if (!ll) { alert('無法辨識座標格式，請再確認'); return; }
+      state.me.lat = ll.lat; state.me.lng = ll.lng;
+      state.analysisById = {};
+      try { const e = await Elevation.elevationAt(state.me); if (e != null) state.me.alt = Math.round(e); } catch (_) {}
+      saveState();
+      if (mapView.focus) mapView.focus(state.me);
+      render();
+      inp.value = '';
+    };
+    document.getElementById('btn-paste').onclick = applyPaste;
+    document.getElementById('paste-coord').onkeydown = (e) => { if (e.key === 'Enter') applyPaste(); };
 
     document.getElementById('btn-locate').onclick = () => {
       if (!navigator.geolocation) return alert('此裝置不支援定位');
