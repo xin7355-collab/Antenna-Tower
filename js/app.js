@@ -17,7 +17,12 @@
     peaks: S.peaks.map((p) => ({ ...p })),
     selectedId: null,
     analysisById: {},          // id -> analyzePath 結果（快取）
-    settings: { freqMHz: 145.7, obsAntenna: 3, tgtAntenna: 6, k: Geo.K_DEFAULT, withCurvature: true },
+    settings: {
+      freqMHz: 145.7, obsAntenna: 3, tgtAntenna: 6, k: Geo.K_DEFAULT, withCurvature: true,
+      eirpDbm: 37,      // 等效全向輻射功率（約 5 W）
+      rxGainDbi: 3,     // 接收天線增益
+      rxSensDbm: -110,  // 接收機靈敏度
+    },
   };
 
   let mapView, arView;
@@ -90,6 +95,17 @@
         `地面 ${Math.round(worst.ground)} m，淨空 ${worst.clearance >= 0 ? '+' : ''}${Math.round(worst.clearance)} m` +
         `（菲涅耳比 ${isFinite(worst.ratio) ? worst.ratio.toFixed(2) : '—'}）</div>`);
     }
+    // 連結預算
+    const eirp = state.settings.eirpDbm;
+    const rxGain = state.settings.rxGainDbi;
+    const sens = state.settings.rxSensDbm;
+    const rxPower = eirp + rxGain - a.totalLoss;   // 概略接收功率 (dBm)
+    const margin = rxPower - sens;                  // 連結餘裕 (dB)
+    const marginCls = margin >= 10 ? 'ok' : margin >= 0 ? 'marg' : 'bad';
+    rows.push(`<div class="sub">路徑損耗：${a.totalLoss.toFixed(1)} dB` +
+      `（自由空間 ${a.fspl.toFixed(1)} + 繞射 ${a.diffractionLoss.toFixed(1)}）</div>`);
+    rows.push(`<div class="sub ${marginCls}">連結餘裕：${margin >= 0 ? '+' : ''}${margin.toFixed(1)} dB` +
+      `（接收約 ${rxPower.toFixed(0)} dBm / 靈敏度 ${sens} dBm）</div>`);
     rows.push(`<div class="sub">理論無線電視距上限：約 ${horizon.toFixed(0)} km</div>`);
     info.innerHTML = rows.join('');
   }
@@ -177,6 +193,10 @@
       renderPanel();
       if (state.selectedId) select(state.selectedId);
     };
+    const reselect = () => { if (state.selectedId) select(state.selectedId); };
+    document.getElementById('opt-eirp').onchange = (e) => { state.settings.eirpDbm = parseFloat(e.target.value) || 0; reselect(); };
+    document.getElementById('opt-rxg').onchange = (e) => { state.settings.rxGainDbi = parseFloat(e.target.value) || 0; reselect(); };
+    document.getElementById('opt-sens').onchange = (e) => { state.settings.rxSensDbm = parseFloat(e.target.value) || 0; reselect(); };
 
     document.getElementById('btn-locate').onclick = () => {
       if (!navigator.geolocation) return alert('此裝置不支援定位');

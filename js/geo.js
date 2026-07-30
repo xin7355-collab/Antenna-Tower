@@ -142,6 +142,36 @@
   }
 
   /**
+   * 自由空間路徑損耗 (dB)。distM 公尺，freqMHz MHz。
+   *   FSPL = 20log10(d_km) + 20log10(f_MHz) + 32.44
+   */
+  function fsplDb(distM, freqMHz) {
+    if (distM <= 0) return 0;
+    return 20 * Math.log10(distM / 1000) + 20 * Math.log10(freqMHz) + 32.44;
+  }
+
+  /**
+   * 菲涅耳-克希荷夫繞射參數 v。
+   * clearance = 視線高 − 地形高（>0 表淨空）；F1 為第一菲涅耳半徑。
+   *   v = -√2 · (clearance / F1)
+   * v 越大（正）代表地形越突出視線 → 繞射損耗越大。
+   */
+  function diffractionV(clearance, fresnelF1) {
+    if (!(fresnelF1 > 0)) return -Infinity;
+    return -Math.SQRT2 * (clearance / fresnelF1);
+  }
+
+  /**
+   * 單一刀刃繞射損耗 (dB)，ITU-R P.526 近似式：
+   *   J(v) = 6.9 + 20log10( √((v−0.1)²+1) + v − 0.1 )   (v > -0.78)
+   *   J(v) = 0                                            (v ≤ -0.78)
+   */
+  function knifeEdgeLossDb(v) {
+    if (v <= -0.78) return 0;
+    return 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) ** 2 + 1) + v - 0.1);
+  }
+
+  /**
    * 把公尺距離格式化為易讀字串。
    */
   function fmtDistance(m) {
@@ -156,6 +186,7 @@
     distance, bearing, compass8, compass16,
     destination, samplePath,
     earthBulge, radioHorizonKm, fresnelRadius, elevationAngle,
+    fsplDb, diffractionV, knifeEdgeLossDb,
     fmtDistance,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

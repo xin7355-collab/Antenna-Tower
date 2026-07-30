@@ -106,7 +106,8 @@
     const h1 = (first.ground ?? 0) + obsAntenna;
     const h2 = (last.ground ?? 0) + tgtAntenna;
 
-    let worst = null;
+    let worst = null;       // 淨空最小處
+    let maxV = -Infinity;   // 繞射參數最大處（損耗最大）
     const obstructions = [];
     const samples = profile.map((p) => {
       const d1 = p.dist;
@@ -119,12 +120,14 @@
       const clearance = los - groundEff;           // >0 表示直線在地形之上
       const fresnel = Geo.fresnelRadius(d1, d2, freqMHz, 1);
       const ratio = fresnel > 0 ? clearance / fresnel : Infinity; // 淨空比
-      const s = { dist: d1, ground: p.ground, los, bulge, clearance, fresnel, ratio, lat: p.lat, lng: p.lng };
+      const v = Geo.diffractionV(clearance, fresnel);
+      const s = { dist: d1, ground: p.ground, los, bulge, clearance, fresnel, ratio, v, lat: p.lat, lng: p.lng };
       // 端點本身不列入遮蔽判斷
       const isEnd = p === first || p === last;
       if (!isEnd) {
         if (clearance < 0) obstructions.push(s);
         if (!worst || clearance < worst.clearance) worst = s;
+        if (v > maxV) maxV = v;
       }
       return s;
     });
@@ -133,7 +136,15 @@
     // 工程慣例：第一菲涅耳區至少淨空 60% 才視為「良好」
     const clear = losClear && (worst ? worst.ratio >= 0.6 : true);
 
-    return { clear, losClear, worst, obstructions, samples, D, h1, h2, freqMHz };
+    // 連結預算：自由空間損耗 + 單一刀刃繞射損耗（取最壞點近似）
+    const fspl = Geo.fsplDb(D, freqMHz);
+    const diffractionLoss = Geo.knifeEdgeLossDb(maxV);
+    const totalLoss = fspl + diffractionLoss;
+
+    return {
+      clear, losClear, worst, obstructions, samples, D, h1, h2, freqMHz,
+      fspl, diffractionLoss, totalLoss, maxV,
+    };
   }
 
   global.Elevation = {
