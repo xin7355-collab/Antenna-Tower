@@ -22,6 +22,9 @@
       eirpDbm: 37,      // 等效全向輻射功率（約 5 W）
       rxGainDbi: 3,     // 接收天線增益
       rxSensDbm: -110,  // 接收機靈敏度
+      showSky: false,   // 天文疊加層
+      skyTime: null,    // null=現在；否則 ISO 字串
+      starMag: 2.2,     // 顯示星等上限
     },
   };
 
@@ -365,14 +368,38 @@
     set('opt-eirp', state.settings.eirpDbm);
     set('opt-rxg', state.settings.rxGainDbi);
     set('opt-sens', state.settings.rxSensDbm);
+    set('opt-starmag', state.settings.starMag);
     chk('opt-curv', state.settings.withCurvature);
     chk('opt-cov', !!state.settings.showCoverage);
+    chk('opt-sky', !!state.settings.showSky);
+    skyTicker();
+  }
+
+  // 天空顯示「現在」時，每 20 秒自動更新一次天體位置
+  let skyTimer = null;
+  function skyTicker() {
+    const live = state.settings.showSky && !state.settings.skyTime;
+    if (live && !skyTimer) skyTimer = setInterval(() => arView && arView.render(state), 20000);
+    if (!live && skyTimer) { clearInterval(skyTimer); skyTimer = null; }
   }
 
   // ---- 設定與工具列 ------------------------------------------------------
   function bindControls() {
     document.getElementById('opt-curv').onchange = (e) => { state.settings.withCurvature = e.target.checked; render(); };
     document.getElementById('opt-cov').onchange = (e) => { state.settings.showCoverage = e.target.checked; updateCoverage(); };
+
+    // 天文層
+    document.getElementById('opt-sky').onchange = (e) => { state.settings.showSky = e.target.checked; saveState(); skyTicker(); render(); };
+    document.getElementById('opt-skytime').onchange = (e) => {
+      state.settings.skyTime = e.target.value ? new Date(e.target.value).toISOString() : null;
+      saveState(); render();
+    };
+    document.getElementById('btn-skynow').onclick = () => {
+      state.settings.skyTime = null;
+      document.getElementById('opt-skytime').value = '';
+      saveState(); render();
+    };
+    document.getElementById('opt-starmag').onchange = (e) => { state.settings.starMag = parseFloat(e.target.value); saveState(); render(); };
     document.getElementById('opt-freq').onchange = (e) => {
       state.settings.freqMHz = parseFloat(e.target.value) || 145.7;
       if (state.selectedId) select(state.selectedId);
@@ -535,5 +562,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 
-  global.App = { state, select };
+  global.App = { state, select, getArView: () => arView, render };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -36,6 +36,7 @@
           <div class="ar-ground"></div>
           <div class="ar-horizon"></div>
           <div class="ar-compass"></div>
+          <svg class="ar-ecliptic" preserveAspectRatio="none"></svg>
           <div class="ar-labels"></div>
           <svg class="ar-aim" preserveAspectRatio="none"></svg>
           <div class="ar-crosshair">+</div>
@@ -54,6 +55,7 @@
       this.$sky = this.root.querySelector('.ar-sky');
       this.$labels = this.root.querySelector('.ar-labels');
       this.$compass = this.root.querySelector('.ar-compass');
+      this.$ecliptic = this.root.querySelector('.ar-ecliptic');
       this.$aim = this.root.querySelector('.ar-aim');
       this.$readout = this.root.querySelector('.ar-readout');
       this.$cam = this.root.querySelector('.ar-cam');
@@ -214,49 +216,70 @@
 
       this._paintCompass(W, horizonY);
 
-      // 計算每個目標的螢幕位置
-      const targets = [...st.stations, ...st.peaks];
-      const angDiff = (a) => { let d = ((a - this.heading + 540) % 360) - 180; return d; };
+      const angDiff = (a) => ((a - this.heading + 540) % 360) - 180;
       const obsAlt = (me.alt || 0) + (me.antenna || 0);
+      const projX = (az) => W / 2 + (angDiff(az) / (HFOV / 2)) * (W / 2);
+      const projY = (alt) => horizonY - ((alt - this.pitch) / (VFOV / 2)) * (H / 2);
       let aim = null;
-
-      // 1) 收集視野內的候選標籤
       const cand = [];
-      targets.forEach((t) => {
-        const dh = angDiff(Geo.bearing(me, t));
-        if (Math.abs(dh) > HFOV / 2 + 4) return; // 視野外
-        const dist = Geo.distance(me, t);
+
+      // 1a) 陸地目標（山/站台）
+      [...st.stations, ...st.peaks].forEach((t) => {
         const brg = Geo.bearing(me, t);
+        if (Math.abs(angDiff(brg)) > HFOV / 2 + 4) return;
+        const dist = Geo.distance(me, t);
         const elev = Geo.elevationAngle(obsAlt, t.alt, dist, st.settings.withCurvature, st.settings.k);
-        const x = W / 2 + (dh / (HFOV / 2)) * (W / 2);
-        const y = horizonY - ((elev - this.pitch) / (VFOV / 2)) * (H / 2);
         const selected = t.id === st.selectedId;
         const a = st.analysisById[t.id];
         const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
         const blocked = a && !a.losClear;
-        // 優先權：選定 > 站台 > 高/近的山峰
-        const prio = (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000;
-        cand.push({ t, dist, brg, elev, x, y, selected, prio, status, blocked });
-        if (selected) aim = { x, y, t, dist, brg, elev, blocked };
+        cand.push({
+          id: t.id, name: t.name, kind: t.type, selected, status, stick: true,
+          x: projX(brg), y: projY(elev),
+          sub: `${t.alt} m · ${Geo.fmtDistance(dist)}`,
+          prio: (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000,
+          readout: () => this._geoReadout(t, dist, brg, elev, blocked),
+          color: blocked ? '#e23b3b' : '#2f6fff',
+        });
       });
 
-      // 2) 去重疊：依優先權放置，若與已放置標籤水平太近則跳過
-      const MIN_GAP = 62;
+      // 1b) 天文層（太陽/月亮/行星/星星）+ 黃道線
+      if (st.settings.showSky && global.Sky) {
+        const date = st.settings.skyTime ? new Date(st.settings.skyTime) : new Date();
+        this._paintEcliptic(Sky.eclipticPath(date, me.lat, me.lng, 5), angDiff, projX, projY, W, H);
+        const objs = Sky.skyObjects(date, me.lat, me.lng, { maxMag: st.settings.starMag != null ? st.settings.starMag : 2.2 });
+        objs.forEach((o) => {
+          if (o.alt < -2) return;                        // 地平線下不畫
+          if (Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
+          const selected = o.id === st.selectedId;
+          const pr = o.type === 'sun' || o.type === 'moon' ? 5e5 : o.type === 'planet' ? 2e5 : 1e5 - (o.mag || 0) * 1000;
+          cand.push({
+            id: o.id, name: o.name, kind: 'sky-' + o.type, selected, stick: false,
+            x: projX(o.az), y: projY(o.alt),
+            sub: `方位 ${Math.round(o.az)}° · 仰角 ${o.alt.toFixed(0)}°`,
+            prio: (selected ? 1e9 : 0) + pr,
+            readout: () => this._skyReadout(o),
+            color: '#ffd36b',
+          });
+        });
+      } else {
+        this.$ecliptic.innerHTML = '';
+      }
+
+      // 2) 去重疊：依優先權放置，水平與垂直都接近才視為重疊
       const placed = [];
       cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
-        if (!c.selected && placed.some((p) => Math.abs(p.x - c.x) < MIN_GAP)) return;
+        if (!c.selected && placed.some((p) => Math.abs(p.x - c.x) < 62 && Math.abs(p.y - c.y) < 26)) return;
         placed.push(c);
+        if (c.selected) aim = c;
       });
 
       // 3) 依 x 由左到右輸出
-      const html = placed.sort((a, b) => a.x - b.x).map((c) => {
-        const cls = `arlbl arlbl-${c.t.type}${c.selected ? ' arlbl-sel' : ''}` +
-          `${c.status ? ' arlbl-' + c.status : ''}`;
-        return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.t.id}">` +
-          `<span class="arlbl-name">${c.t.name}</span>` +
-          `<span class="arlbl-sub">${c.t.alt} m · ${Geo.fmtDistance(c.dist)}</span>` +
-          `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - c.y)}px"></i>` +
-          `</div>`;
+      const html = placed.slice().sort((a, b) => a.x - b.x).map((c) => {
+        const cls = `arlbl arlbl-${c.kind}${c.selected ? ' arlbl-sel' : ''}${c.status ? ' arlbl-' + c.status : ''}`;
+        const stick = c.stick ? `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - c.y)}px"></i>` : '';
+        return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.id}">` +
+          `<span class="arlbl-name">${c.name}</span><span class="arlbl-sub">${c.sub}</span>${stick}</div>`;
       });
 
       this.$labels.innerHTML = html.join('');
@@ -265,7 +288,7 @@
       });
       this._placed = placed; // 供點擊對準用
 
-      this._paintAim(aim, W, H, horizonY);
+      this._paintAim(aim, W, H);
 
       // VR：把整個場景複製到右眼；相機串流共用同一來源
       if (this.vr) {
@@ -294,24 +317,48 @@
       this.$compass.innerHTML = ticks.join('');
     }
 
-    _paintAim(aim, W, H, horizonY) {
+    _paintAim(aim, W, H) {
       if (!aim) { this.$aim.innerHTML = ''; this.$readout.innerHTML = ''; return; }
-      const color = aim.blocked ? '#e23b3b' : '#2f6fff';
+      const color = aim.color || '#2f6fff';
       // 從畫面底部中央拉一條瞄準線到目標（照片中的藍線）
       this.$aim.setAttribute('viewBox', `0 0 ${W} ${H}`);
       this.$aim.innerHTML =
-        `<line x1="${W / 2}" y1="${H}" x2="${aim.x}" y2="${aim.y}" ` +
-        `stroke="${color}" stroke-width="3"/>` +
-        `<circle cx="${aim.x}" cy="${aim.y}" r="7" fill="none" stroke="${color}" stroke-width="3"/>`;
+        `<line x1="${W / 2}" y1="${H}" x2="${aim.x}" y2="${aim.y}" stroke="${color}" stroke-width="3"/>` +
+        `<circle cx="${aim.x}" cy="${aim.y}" r="8" fill="none" stroke="${color}" stroke-width="3"/>`;
+      this.$readout.innerHTML = aim.readout ? aim.readout() : `<div class="ro-name">${aim.name}</div>`;
+    }
 
-      const blockedTxt = aim.blocked
-        ? `<span class="ro-blocked">⛰️ 視線被地形遮蔽</span>`
-        : `<span class="ro-clear">✓ 視線淨空</span>`;
-      this.$readout.innerHTML =
-        `<div class="ro-name">${aim.t.name}</div>` +
-        `<div class="ro-line">海拔：${aim.t.alt.toLocaleString()} m　距離：${Geo.fmtDistance(aim.dist)}</div>` +
-        `<div class="ro-line">方位：${Math.round(aim.brg)}° ${Geo.compass8(aim.brg)}　仰角：${aim.elev.toFixed(1)}°</div>` +
-        `<div class="ro-line">${blockedTxt}</div>`;
+    _geoReadout(t, dist, brg, elev, blocked) {
+      const analyzed = this.state && this.state.analysisById[t.id];
+      const los = !analyzed ? '' :
+        (blocked ? '<div class="ro-line"><span class="ro-blocked">⛰️ 視線被地形遮蔽</span></div>'
+                 : '<div class="ro-line"><span class="ro-clear">✓ 視線淨空</span></div>');
+      return `<div class="ro-name">${t.name}</div>` +
+        `<div class="ro-line">海拔：${t.alt.toLocaleString()} m　距離：${Geo.fmtDistance(dist)}</div>` +
+        `<div class="ro-line">方位：${Math.round(brg)}° ${Geo.compass8(brg)}　仰角：${elev.toFixed(1)}°</div>` + los;
+    }
+
+    _skyReadout(o) {
+      const typeName = { sun: '太陽', moon: '月亮', planet: '行星', star: '恆星', sat: '衛星' }[o.type] || '';
+      const extra = (o.type === 'moon' && o.illum != null) ? `　照明 ${Math.round(o.illum * 100)}%`
+        : (o.mag != null ? `　星等 ${o.mag}` : '');
+      return `<div class="ro-name">${o.name}</div>` +
+        `<div class="ro-line">方位：${Math.round(o.az)}° ${Geo.compass8(o.az)}　仰角：${o.alt.toFixed(1)}°</div>` +
+        `<div class="ro-line">天體：${typeName}${extra}</div>`;
+    }
+
+    // 畫黃道線（在視野內的連續段）
+    _paintEcliptic(pts, angDiff, projX, projY, W, H) {
+      let d = '', pen = false;
+      pts.forEach((p) => {
+        if (Math.abs(angDiff(p.az)) < HFOV / 2 + 8 && p.alt > -20) {
+          const x = projX(p.az), y = projY(p.alt);
+          d += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+          pen = true;
+        } else { pen = false; }
+      });
+      this.$ecliptic.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      this.$ecliptic.innerHTML = d ? `<path d="${d}" fill="none" stroke="#e0a94a" stroke-width="2" stroke-dasharray="2 4" opacity="0.8"/>` : '';
     }
   }
 

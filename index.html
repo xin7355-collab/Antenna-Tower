@@ -56,7 +56,23 @@
         </label>
         <label class="chk"><input id="opt-curv" type="checkbox" checked /> 地球曲率</label>
         <label class="chk"><input id="opt-cov" type="checkbox" /> 涵蓋範圍</label>
+        <label class="chk"><input id="opt-sky" type="checkbox" /> 🌌 天空</label>
       </div>
+
+      <details class="adv" id="sky-adv">
+        <summary>天空：太陽/月亮/行星/星星</summary>
+        <div class="opts">
+          <label>時間<input id="opt-skytime" type="datetime-local" /></label>
+          <button id="btn-skynow" class="mini2">現在</button>
+          <label>星等上限
+            <select id="opt-starmag">
+              <option value="1.5">亮星 ≤1.5</option>
+              <option value="2.2" selected>≤2.2</option>
+              <option value="3">多 ≤3</option>
+            </select>
+          </label>
+        </div>
+      </details>
 
       <details class="adv">
         <summary>進階：連結預算</summary>
@@ -99,6 +115,7 @@
   <script src="js/geo.js"></script>
   <script src="js/elevation.js"></script>
   <script src="js/parse.js"></script>
+  <script src="js/sky.js"></script>
   <script src="js/data.js"></script>
   <script src="js/map.js"></script>
   <script src="js/ar.js"></script>
