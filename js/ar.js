@@ -37,6 +37,7 @@
         <div class="ar-compass"></div>
         <div class="ar-labels"></div>
         <svg class="ar-aim" preserveAspectRatio="none"></svg>
+        <div class="ar-crosshair">+</div>
         <div class="ar-readout"></div>
         <div class="ar-controls">
           <button data-act="sensor" title="使用手機羅盤">🧭 羅盤</button>
@@ -90,8 +91,19 @@
       let hd = (typeof e.webkitCompassHeading === 'number')
         ? e.webkitCompassHeading
         : (e.alpha != null ? 360 - e.alpha : null);
-      if (hd != null) this.heading = (hd + 360) % 360;
-      if (e.beta != null) this.pitch = Math.max(-40, Math.min(60, e.beta - 90));
+      // 圓周低通濾波，減少羅盤抖動（以 sin/cos 分量平滑角度）
+      const A = 0.25;
+      if (hd != null) {
+        const rad = Geo.toRad((hd + 360) % 360);
+        const prev = Geo.toRad(this.heading);
+        const s = A * Math.sin(rad) + (1 - A) * Math.sin(prev);
+        const c = A * Math.cos(rad) + (1 - A) * Math.cos(prev);
+        this.heading = (Geo.toDeg(Math.atan2(s, c)) + 360) % 360;
+      }
+      if (e.beta != null) {
+        const target = Math.max(-40, Math.min(60, e.beta - 90));
+        this.pitch = A * target + (1 - A) * this.pitch; // 俯仰角低通
+      }
       this._paint();
     }
 
@@ -152,11 +164,13 @@
         const x = W / 2 + (dh / (HFOV / 2)) * (W / 2);
         const y = horizonY - ((elev - this.pitch) / (VFOV / 2)) * (H / 2);
         const selected = t.id === st.selectedId;
+        const a = st.analysisById[t.id];
+        const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
+        const blocked = a && !a.losClear;
         // 優先權：選定 > 站台 > 高/近的山峰
         const prio = (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000;
-        cand.push({ t, dist, brg, elev, x, y, selected, prio,
-          blocked: st.analysisById[t.id] && !st.analysisById[t.id].losClear });
-        if (selected) aim = { x, y, t, dist, brg, elev, blocked: st.analysisById[t.id] && !st.analysisById[t.id].losClear };
+        cand.push({ t, dist, brg, elev, x, y, selected, prio, status, blocked });
+        if (selected) aim = { x, y, t, dist, brg, elev, blocked };
       });
 
       // 2) 去重疊：依優先權放置，若與已放置標籤水平太近則跳過
@@ -169,7 +183,8 @@
 
       // 3) 依 x 由左到右輸出
       const html = placed.sort((a, b) => a.x - b.x).map((c) => {
-        const cls = `arlbl arlbl-${c.t.type}${c.selected ? ' arlbl-sel' : ''}${c.blocked ? ' arlbl-blocked' : ''}`;
+        const cls = `arlbl arlbl-${c.t.type}${c.selected ? ' arlbl-sel' : ''}` +
+          `${c.status ? ' arlbl-' + c.status : ''}`;
         return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.t.id}">` +
           `<span class="arlbl-name">${c.t.name}</span>` +
           `<span class="arlbl-sub">${c.t.alt} m · ${Geo.fmtDistance(c.dist)}</span>` +

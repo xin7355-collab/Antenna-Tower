@@ -111,8 +111,12 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-sub { display: block; font-size: 10px; color: #eaf0f6; text-shadow: 0 1px 2px #000; }
 .arlbl-stick { position: absolute; left: 50%; top: 100%; width: 1px; background: rgba(255,255,255,.55); }
 .arlbl-station .arlbl-name { color: #8fd1ff; }
-.arlbl-blocked .arlbl-name { color: #ff9a9a; }
+.arlbl-ok .arlbl-name { color: #7dffb0; }
+.arlbl-marg .arlbl-name { color: #ffd36b; }
+.arlbl-bad .arlbl-name { color: #ff9a9a; }
 .arlbl-sel .arlbl-name { color: #ffe27a; font-size: 16px; }
+
+.ar-crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,.7); font-size: 26px; font-weight: 300; pointer-events: none; text-shadow: 0 1px 3px #000; }
 
 .ar-aim { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
