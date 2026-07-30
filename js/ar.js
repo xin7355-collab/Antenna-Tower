@@ -30,29 +30,23 @@
 
     _build() {
       this.root.innerHTML = `
-        <div class="ar-scene">
-          <video class="ar-cam" playsinline muted style="display:none"></video>
-          <div class="ar-sky"></div>
-          <div class="ar-ground"></div>
-          <div class="ar-horizon"></div>
-          <div class="ar-compass"></div>
-          <svg class="ar-ecliptic" preserveAspectRatio="none"></svg>
-          <div class="ar-labels"></div>
-          <svg class="ar-aim" preserveAspectRatio="none"></svg>
-          <div class="ar-crosshair">+</div>
-        </div>
-        <div class="ar-scene-clone" aria-hidden="true"></div>
+        <video class="ar-cam" playsinline autoplay muted style="display:none"></video>
+        <div class="ar-sky"></div>
+        <div class="ar-ground"></div>
+        <div class="ar-horizon"></div>
+        <div class="ar-compass"></div>
+        <svg class="ar-ecliptic" preserveAspectRatio="none"></svg>
+        <div class="ar-labels"></div>
+        <svg class="ar-aim" preserveAspectRatio="none"></svg>
+        <div class="ar-crosshair">+</div>
         <div class="ar-aimhud" style="display:none"></div>
         <div class="ar-readout"></div>
         <div class="ar-controls">
           <button data-act="sensor" title="使用手機羅盤">🧭 羅盤</button>
           <button data-act="camera" title="開啟相機背景">📷 相機</button>
           <button data-act="full" title="全螢幕">⛶ 全螢幕</button>
-          <button data-act="vr" title="VR 雙眼分割（放進 Cardboard 眼鏡）">🥽 VR</button>
           <span class="ar-hint">拖曳轉視角・點山對準</span>
         </div>`;
-      this.$scene = this.root.querySelector('.ar-scene');
-      this.$clone = this.root.querySelector('.ar-scene-clone');
       this.$sky = this.root.querySelector('.ar-sky');
       this.$labels = this.root.querySelector('.ar-labels');
       this.$compass = this.root.querySelector('.ar-compass');
@@ -61,7 +55,6 @@
       this.$readout = this.root.querySelector('.ar-readout');
       this.$aimhud = this.root.querySelector('.ar-aimhud');
       this.$cam = this.root.querySelector('.ar-cam');
-      this.vr = false;
 
       // 桌機拖曳 + 點擊對準
       let drag = null, moved = 0;
@@ -89,7 +82,6 @@
       this.root.querySelector('[data-act="sensor"]').onclick = () => this.enableSensor();
       this.root.querySelector('[data-act="camera"]').onclick = () => this.toggleCamera();
       this.root.querySelector('[data-act="full"]').onclick = () => this.toggleFullscreen();
-      this.root.querySelector('[data-act="vr"]').onclick = () => this.toggleVR();
       document.addEventListener('fullscreenchange', () => setTimeout(() => this._paint(), 100));
       // 尺寸/方向改變時重繪，避免殘留壞掉的版面
       window.addEventListener('resize', () => this._paint());
@@ -106,15 +98,6 @@
       } else {
         (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
       }
-    }
-
-    // VR 雙眼分割：把畫面左右各顯示一次，放進 Cardboard 眼鏡即成 VR
-    toggleVR() {
-      this.vr = !this.vr;
-      this.root.classList.toggle('ar-vr', this.vr);
-      if (this.vr && !document.fullscreenElement) this.toggleFullscreen();
-      if (!this.vr) this.$clone.innerHTML = '';
-      this._paint();
     }
 
     async enableSensor() {
@@ -160,6 +143,9 @@
         return;
       }
       try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('此瀏覽器不支援相機（請用 Safari/Chrome 並以 https 開啟）');
+        }
         // 優先用後鏡頭；不支援時退回任一相機
         let stream;
         try {
@@ -169,12 +155,14 @@
         } catch (_) {
           stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         }
-        this.$cam.srcObject = stream;
+        // iOS 需要這些屬性才能行內自動播放
         this.$cam.setAttribute('playsinline', '');
-        await this.$cam.play();
+        this.$cam.setAttribute('webkit-playsinline', '');
+        this.$cam.muted = true;
+        this.$cam.srcObject = stream;
         this.$cam.style.display = 'block';
-        // 讓相機透出來：隱藏不透明的天空/地面漸層，只留地平線/羅盤/標籤
-        this.root.classList.add('ar-cam-on');
+        this.root.classList.add('ar-cam-on'); // 隱藏天空/地面漸層讓鏡頭透出
+        try { await this.$cam.play(); } catch (_) { /* 部分瀏覽器 autoplay 屬性已接手 */ }
         this._paint();
       } catch (err) {
         const msg = (err && err.name === 'NotAllowedError')
@@ -216,8 +204,7 @@
       const st = this.state;
       const me = st.me;
       const H = this.root.clientHeight;
-      // VR 模式下每隻眼睛只有半個寬度
-      const W = this.vr ? this.root.clientWidth / 2 : this.root.clientWidth;
+      const W = this.root.clientWidth;
 
       // 天空/地面：地平線隨俯仰角上下移動
       const horizonY = H / 2 + (this.pitch / (VFOV / 2)) * (H / 2);
@@ -319,16 +306,6 @@
       // 對準 HUD：手機當天線仰角/方位對準器
       const selTgt = [...st.stations, ...st.peaks].find((t) => t.id === st.selectedId);
       this._paintAimHud(selTgt, me, st);
-
-      // VR：把整個場景複製到右眼；相機串流共用同一來源
-      if (this.vr) {
-        this.$clone.innerHTML = this.$scene.innerHTML;
-        const camB = this.$clone.querySelector('.ar-cam');
-        if (camB && this.$cam.srcObject) {
-          camB.srcObject = this.$cam.srcObject;
-          camB.play().catch(() => {});
-        }
-      }
     }
 
     // 對準 HUD：把手機當成天線對準器，即時比對「目前朝向」與「目標仰角/方位」
