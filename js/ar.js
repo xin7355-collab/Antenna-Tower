@@ -138,29 +138,43 @@
       // 計算每個目標的螢幕位置
       const targets = [...st.stations, ...st.peaks];
       const angDiff = (a) => { let d = ((a - this.heading + 540) % 360) - 180; return d; };
-      const html = [];
+      const obsAlt = (me.alt || 0) + (me.antenna || 0);
       let aim = null;
 
+      // 1) 收集視野內的候選標籤
+      const cand = [];
       targets.forEach((t) => {
+        const dh = angDiff(Geo.bearing(me, t));
+        if (Math.abs(dh) > HFOV / 2 + 4) return; // 視野外
         const dist = Geo.distance(me, t);
         const brg = Geo.bearing(me, t);
-        const dh = angDiff(brg);
-        if (Math.abs(dh) > HFOV / 2 + 4) return; // 視野外
-        const obsAlt = (me.alt || 0) + (me.antenna || 0);
         const elev = Geo.elevationAngle(obsAlt, t.alt, dist, st.settings.withCurvature, st.settings.k);
         const x = W / 2 + (dh / (HFOV / 2)) * (W / 2);
         const y = horizonY - ((elev - this.pitch) / (VFOV / 2)) * (H / 2);
         const selected = t.id === st.selectedId;
-        const blocked = st.analysisById[t.id] && !st.analysisById[t.id].losClear;
-        const cls = `arlbl arlbl-${t.type}${selected ? ' arlbl-sel' : ''}${blocked ? ' arlbl-blocked' : ''}`;
-        html.push(
-          `<div class="${cls}" style="left:${x}px;top:${y}px" data-id="${t.id}">` +
-          `<span class="arlbl-name">${t.name}</span>` +
-          `<span class="arlbl-sub">${t.alt} m · ${Geo.fmtDistance(dist)}</span>` +
-          `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - y)}px"></i>` +
-          `</div>`
-        );
-        if (selected) aim = { x, y, t, dist, brg, elev, blocked };
+        // 優先權：選定 > 站台 > 高/近的山峰
+        const prio = (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000;
+        cand.push({ t, dist, brg, elev, x, y, selected, prio,
+          blocked: st.analysisById[t.id] && !st.analysisById[t.id].losClear });
+        if (selected) aim = { x, y, t, dist, brg, elev, blocked: st.analysisById[t.id] && !st.analysisById[t.id].losClear };
+      });
+
+      // 2) 去重疊：依優先權放置，若與已放置標籤水平太近則跳過
+      const MIN_GAP = 62;
+      const placed = [];
+      cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
+        if (!c.selected && placed.some((p) => Math.abs(p.x - c.x) < MIN_GAP)) return;
+        placed.push(c);
+      });
+
+      // 3) 依 x 由左到右輸出
+      const html = placed.sort((a, b) => a.x - b.x).map((c) => {
+        const cls = `arlbl arlbl-${c.t.type}${c.selected ? ' arlbl-sel' : ''}${c.blocked ? ' arlbl-blocked' : ''}`;
+        return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.t.id}">` +
+          `<span class="arlbl-name">${c.t.name}</span>` +
+          `<span class="arlbl-sub">${c.t.alt} m · ${Geo.fmtDistance(c.dist)}</span>` +
+          `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - c.y)}px"></i>` +
+          `</div>`;
       });
 
       this.$labels.innerHTML = html.join('');

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>高山無線電站台 VR 地圖</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
@@ -79,7 +80,13 @@
         </div>
         <div id="analyze-progress" class="analyze-progress"></div>
         <ul id="target-list" class="target-list"></ul>
-        <div class="tip">💡 在地圖上點空白處可新增站台；拖曳「📍我的位置」可移動。</div>
+        <div class="badge-legend">
+          <span><b class="b-ok">通</b>視線淨空</span>
+          <span><b class="b-marg">繞</b>繞射損耗</span>
+          <span><b class="b-bad">擋</b>被山擋住</span>
+          <span>⭐最佳可通</span>
+        </div>
+        <div class="tip">💡 在地圖上點空白處可新增站台；拖曳「📍我的位置」可移動；點站台可編輯。</div>
       </div>
     </aside>
   </main>

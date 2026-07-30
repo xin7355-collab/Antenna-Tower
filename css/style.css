@@ -74,6 +74,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .b-ok { background: #17402c; color: #35d07f; }
 .b-marg { background: #40340f; color: #f5b942; }
 .b-bad { background: #431a1a; color: #ff6161; }
+.badge-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: #9fb0c0; margin-top: 8px; }
+.badge-legend b { margin-right: 3px; }
 .tip { font-size: 11px; color: #6b7a89; margin-top: 8px; line-height: 1.5; }
 
 /* ===== 地圖 marker ===== */
