@@ -33,7 +33,10 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .adv summary { cursor: pointer; color: #9fb0c0; padding: 4px 0; }
 .adv .opts { margin: 4px 0 0; }
 .los-box { background: #1a2029; border: 1px solid #2a313b; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
-.los-title, .list-title { font-weight: 700; margin-bottom: 6px; }
+.los-title, .list-title { font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.mini { margin-left: auto; background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.analyze-progress { font-size: 11px; color: #9fb0c0; min-height: 14px; margin-bottom: 4px; }
+.star { margin-left: 2px; }
 .los-status { font-size: 13px; line-height: 1.5; }
 .los-status .ok, .los-status .b-ok { color: #35d07f; }
 .los-status .marg { color: #f5b942; }

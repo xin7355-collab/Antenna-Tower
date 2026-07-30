@@ -91,6 +91,22 @@
     }
   }
 
+  // 連結餘裕 (dB)：接收功率 − 靈敏度
+  function linkMargin(a) {
+    if (!a) return null;
+    const rxPower = state.settings.eirpDbm + state.settings.rxGainDbi - a.totalLoss;
+    return rxPower - state.settings.rxSensDbm;
+  }
+
+  // 排序權重：可通且餘裕大者優先；未分析者排在對應區塊之後。
+  function rankScore(t) {
+    const a = state.analysisById[t.id];
+    if (!a) return -1e9 + -Geo.distance(state.me, t) / 1000; // 未分析：以距離近者略優
+    const m = linkMargin(a);
+    const base = a.clear ? 3e6 : a.losClear ? 2e6 : 1e6;
+    return base + m * 1000;
+  }
+
   function renderLosStatus(target, a) {
     const info = document.getElementById('los-status');
     const horizon = Geo.radioHorizonKm((state.me.alt || 0) + (state.me.antenna || 0), state.settings.k)
@@ -110,11 +126,9 @@
         `（菲涅耳比 ${isFinite(worst.ratio) ? worst.ratio.toFixed(2) : '—'}）</div>`);
     }
     // 連結預算
-    const eirp = state.settings.eirpDbm;
-    const rxGain = state.settings.rxGainDbi;
     const sens = state.settings.rxSensDbm;
-    const rxPower = eirp + rxGain - a.totalLoss;   // 概略接收功率 (dBm)
-    const margin = rxPower - sens;                  // 連結餘裕 (dB)
+    const rxPower = state.settings.eirpDbm + state.settings.rxGainDbi - a.totalLoss;
+    const margin = linkMargin(a);                   // 連結餘裕 (dB)
     const marginCls = margin >= 10 ? 'ok' : margin >= 0 ? 'marg' : 'bad';
     rows.push(`<div class="sub">路徑損耗：${a.totalLoss.toFixed(1)} dB` +
       `（自由空間 ${a.fspl.toFixed(1)} + 繞射 ${a.diffractionLoss.toFixed(1)}）</div>`);
@@ -124,21 +138,63 @@
     info.innerHTML = rows.join('');
   }
 
+  // ---- 一鍵分析全部站台 --------------------------------------------------
+  let analyzing = false;
+  async function analyzeAll() {
+    if (analyzing) return;
+    analyzing = true;
+    const prog = document.getElementById('analyze-progress');
+    const list = state.stations;
+    let done = 0, failed = 0;
+    for (const st of list) {
+      prog.textContent = `分析中… ${done + 1}/${list.length}（${st.name}）`;
+      try {
+        const profile = await Elevation.buildProfile(state.me, st, 96);
+        state.analysisById[st.id] = Elevation.analyzePath(profile, {
+          obsAntenna: state.me.antenna || state.settings.obsAntenna,
+          tgtAntenna: st.antenna || state.settings.tgtAntenna,
+          freqMHz: st.freqMHz || state.settings.freqMHz,
+          k: state.settings.k,
+        });
+      } catch (err) { failed++; }
+      done++;
+      renderPanel();
+    }
+    prog.textContent = failed
+      ? `完成，但 ${failed} 個站台無法取得高程（需連線 open-meteo.com）`
+      : `✓ 已分析 ${done} 個站台，依路徑品質排序`;
+    analyzing = false;
+  }
+
   // ---- 資訊面板 ----------------------------------------------------------
   function renderPanel() {
     const listEl = document.getElementById('target-list');
-    const targets = [...state.stations, ...state.peaks];
+    // 站台依路徑品質排序（已分析者），山峰依距離
+    const stations = [...state.stations].sort((a, b) => rankScore(b) - rankScore(a));
+    const peaks = [...state.peaks].sort((a, b) => Geo.distance(state.me, a) - Geo.distance(state.me, b));
+    const targets = [...stations, ...peaks];
+
+    // 找出最佳可通站台（可通且餘裕最大）
+    let best = null, bestM = -Infinity;
+    stations.forEach((t) => {
+      const a = state.analysisById[t.id];
+      if (a && a.losClear) { const m = linkMargin(a); if (m > bestM) { bestM = m; best = t.id; } }
+    });
+
     listEl.innerHTML = targets.map((t) => {
       const dist = Geo.distance(state.me, t);
       const brg = Geo.bearing(state.me, t);
       const a = state.analysisById[t.id];
       const badge = a ? (a.clear ? '<b class="b-ok">通</b>' : a.losClear ? '<b class="b-marg">繞</b>' : '<b class="b-bad">擋</b>') : '';
+      const star = t.id === best ? '<span class="star" title="最佳可通站台">⭐</span>' : '';
+      const m = a ? linkMargin(a) : null;
+      const marginTxt = m != null ? ` · 餘裕 ${m >= 0 ? '+' : ''}${m.toFixed(0)}dB` : '';
       const sel = t.id === state.selectedId ? ' sel' : '';
       const ico = t.type === 'station' ? '📡' : '⛰️';
       return `<li class="tgt${sel}" data-id="${t.id}">` +
         `<span class="t-ico">${ico}</span>` +
-        `<span class="t-main"><b>${t.name}</b> ${badge}` +
-        `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${t.alt}m</small></span>` +
+        `<span class="t-main"><b>${t.name}</b> ${badge}${star}` +
+        `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${t.alt}m${marginTxt}</small></span>` +
         `</li>`;
     }).join('');
     listEl.querySelectorAll('.tgt').forEach((el) => {
@@ -212,6 +268,8 @@
     document.getElementById('opt-eirp').onchange = (e) => { state.settings.eirpDbm = parseFloat(e.target.value) || 0; reselect(); };
     document.getElementById('opt-rxg').onchange = (e) => { state.settings.rxGainDbi = parseFloat(e.target.value) || 0; reselect(); };
     document.getElementById('opt-sens').onchange = (e) => { state.settings.rxSensDbm = parseFloat(e.target.value) || 0; reselect(); };
+
+    document.getElementById('btn-analyze-all').onclick = () => analyzeAll();
 
     document.getElementById('btn-locate').onclick = () => {
       if (!navigator.geolocation) return alert('此裝置不支援定位');
