@@ -27,7 +27,15 @@
       <div class="me-box">
         <div class="me-title">📍 我的位置 <button id="btn-locate" title="使用 GPS 定位">定位</button></div>
         <div id="me-coord" class="me-coord"></div>
+        <div class="data-btns">
+          <button id="btn-export" title="匯出站台資料 JSON">匯出</button>
+          <button id="btn-import" title="匯入站台資料 JSON">匯入</button>
+          <button id="btn-reset" title="還原為預設資料">還原預設</button>
+          <input id="file-import" type="file" accept="application/json" hidden />
+        </div>
       </div>
+
+      <div id="editor" class="editor"></div>
 
       <div class="opts">
         <label>頻率

@@ -26,16 +26,75 @@
   };
 
   let mapView, arView;
+  const LS_KEY = 'vrmap.state.v1';
 
   function findEntity(id) {
     return [state.me, ...state.stations, ...state.peaks].find((e) => e.id === id) || null;
+  }
+
+  // ---- 本機儲存 ----------------------------------------------------------
+  function saveState() {
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        me: state.me, stations: state.stations, settings: state.settings,
+      }));
+    } catch (_) { /* localStorage 可能被停用，忽略 */ }
+  }
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d.me) Object.assign(state.me, d.me);
+      if (Array.isArray(d.stations)) state.stations = d.stations;
+      if (d.settings) Object.assign(state.settings, d.settings);
+    } catch (_) { /* 資料毀損則忽略 */ }
   }
 
   function render() {
     mapView.render(state);
     arView.render(state);
     renderPanel();
+    renderEditor();
     updateCoverage();
+  }
+
+  // ---- 站台編輯器 --------------------------------------------------------
+  function renderEditor() {
+    const el = document.getElementById('editor');
+    const t = findEntity(state.selectedId);
+    if (!t || t.type !== 'station') { el.innerHTML = ''; return; }
+    el.innerHTML =
+      `<div class="ed-title">✏️ 編輯站台</div>` +
+      `<div class="ed-grid">` +
+      `<label>名稱<input data-f="name" type="text" value="${t.name.replace(/"/g, '&quot;')}"></label>` +
+      `<label>海拔(m)<input data-f="alt" type="number" value="${t.alt}"></label>` +
+      `<label>天線(m)<input data-f="antenna" type="number" value="${t.antenna || 0}"></label>` +
+      `<label>頻率(MHz)<input data-f="freqMHz" type="number" step="0.001" value="${t.freqMHz || ''}"></label>` +
+      `<label>緯度<input data-f="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
+      `<label>經度<input data-f="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
+      `</div>` +
+      `<div class="ed-btns"><button id="ed-del" class="danger">刪除此站台</button></div>`;
+
+    el.querySelectorAll('input[data-f]').forEach((inp) => {
+      inp.onchange = () => {
+        const f = inp.dataset.f;
+        t[f] = (f === 'name') ? inp.value : parseFloat(inp.value);
+        state.analysisById = {};        // 資料改變，重算
+        saveState();
+        render();
+        if (t.type !== 'me') select(t.id);
+      };
+    });
+    document.getElementById('ed-del').onclick = () => {
+      if (!confirm(`確定刪除「${t.name}」？`)) return;
+      state.stations = state.stations.filter((s) => s.id !== t.id);
+      delete state.analysisById[t.id];
+      state.selectedId = null;
+      saveState();
+      mapView.clearPath();
+      render();
+    };
   }
 
   // 依無線電視距畫各站台涵蓋圈（假設對方天線高 RX_H 公尺）
@@ -251,6 +310,19 @@
     ctx.fillText(target.name, x(D) - 40, y(analysis.h2) - 6);
   }
 
+  // 讓表單欄位反映目前 state（載入/匯入/還原後呼叫）
+  function syncControls() {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
+    set('opt-freq', state.settings.freqMHz);
+    set('opt-ant', state.me.antenna);
+    set('opt-eirp', state.settings.eirpDbm);
+    set('opt-rxg', state.settings.rxGainDbi);
+    set('opt-sens', state.settings.rxSensDbm);
+    chk('opt-curv', state.settings.withCurvature);
+    chk('opt-cov', !!state.settings.showCoverage);
+  }
+
   // ---- 設定與工具列 ------------------------------------------------------
   function bindControls() {
     document.getElementById('opt-curv').onchange = (e) => { state.settings.withCurvature = e.target.checked; render(); };
@@ -264,10 +336,57 @@
       renderPanel();
       if (state.selectedId) select(state.selectedId);
     };
-    const reselect = () => { if (state.selectedId) select(state.selectedId); };
+    const reselect = () => { saveState(); if (state.selectedId) select(state.selectedId); };
     document.getElementById('opt-eirp').onchange = (e) => { state.settings.eirpDbm = parseFloat(e.target.value) || 0; reselect(); };
     document.getElementById('opt-rxg').onchange = (e) => { state.settings.rxGainDbi = parseFloat(e.target.value) || 0; reselect(); };
     document.getElementById('opt-sens').onchange = (e) => { state.settings.rxSensDbm = parseFloat(e.target.value) || 0; reselect(); };
+
+    // 匯出 / 匯入 / 還原
+    document.getElementById('btn-export').onclick = () => {
+      const data = JSON.stringify({ me: state.me, stations: state.stations, settings: state.settings }, null, 2);
+      const blob = new Blob([data], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'vrmap-stations.json';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    const fileInput = document.getElementById('file-import');
+    document.getElementById('btn-import').onclick = () => fileInput.click();
+    fileInput.onchange = () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const d = JSON.parse(reader.result);
+          if (d.me) Object.assign(state.me, d.me);
+          if (Array.isArray(d.stations)) state.stations = d.stations;
+          if (d.settings) Object.assign(state.settings, d.settings);
+          state.analysisById = {};
+          state.selectedId = null;
+          saveState();
+          syncControls();
+          mapView.clearPath();
+          render();
+          if (mapView.focus) mapView.focus(state.me);
+        } catch (err) { alert('匯入失敗：JSON 格式錯誤'); }
+      };
+      reader.readAsText(file);
+      fileInput.value = '';
+    };
+    document.getElementById('btn-reset').onclick = () => {
+      if (!confirm('還原為預設站台資料？（會清除你的變更）')) return;
+      try { localStorage.removeItem(LS_KEY); } catch (_) {}
+      state.me = { ...S.me };
+      state.stations = S.stations.map((s) => ({ ...s }));
+      state.peaks = S.peaks.map((p) => ({ ...p }));
+      state.analysisById = {};
+      state.selectedId = null;
+      syncControls();
+      mapView.clearPath();
+      render();
+    };
 
     document.getElementById('btn-analyze-all').onclick = () => analyzeAll();
 
@@ -281,6 +400,8 @@
         render();
       }, () => alert('定位失敗'));
     };
+
+    syncControls();
 
     // 分頁切換
     document.querySelectorAll('.tab').forEach((b) => {
@@ -305,6 +426,7 @@
       if (ent.type === 'me') {
         try { const e = await Elevation.elevationAt(ent); if (e != null) ent.alt = Math.round(e); } catch (_) {}
       }
+      saveState();
       render();
       if (state.selectedId) select(state.selectedId);
     },
@@ -314,12 +436,14 @@
       const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz };
       try { const e = await Elevation.elevationAt(st); if (e != null) st.alt = Math.round(e); } catch (_) {}
       state.stations.push(st);
+      saveState();
       render();
       select(st.id);
     },
   };
 
   function init() {
+    loadState();  // 還原上次的站台/設定（若有）
     // 地圖若載入失敗（例如缺 Leaflet），不應中斷 AR 視角與面板。
     try {
       if (global.L) {

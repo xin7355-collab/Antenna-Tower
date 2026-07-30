@@ -24,6 +24,19 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .me-title button { margin-left: auto; background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .me-coord { font-size: 12px; color: #9fb0c0; margin-top: 6px; }
 
+.data-btns { display: flex; gap: 6px; margin-top: 8px; }
+.data-btns button { flex: 1; background: #222a35; color: #cdd6df; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; font-size: 12px; cursor: pointer; }
+.data-btns button:hover { background: #2a323d; }
+
+.editor { background: #1a2029; border: 1px solid #2a313b; border-radius: 10px; padding: 10px; margin: 10px 0; }
+.editor:empty { display: none; }
+.ed-title { font-weight: 700; margin-bottom: 8px; }
+.ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
+.ed-grid label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }
+.ed-grid input { background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; }
+.ed-btns { margin-top: 10px; }
+.ed-btns .danger { width: 100%; background: #431a1a; color: #ff8080; border: 1px solid #6b2626; border-radius: 6px; padding: 6px; cursor: pointer; }
+
 .opts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; font-size: 12px; }
 .opts label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }
 .opts .chk { flex-direction: row; align-items: center; gap: 5px; align-self: end; }
