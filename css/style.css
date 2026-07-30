@@ -147,6 +147,19 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 
 .ar-crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,.7); font-size: 26px; font-weight: 300; pointer-events: none; text-shadow: 0 1px 3px #000; }
 
+/* 對準 HUD */
+.ar-aimhud { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4;
+  background: rgba(8,12,18,.72); border: 1px solid rgba(255,255,255,.18); border-radius: 10px;
+  padding: 8px 12px; color: #eaf0f6; font-size: 13px; line-height: 1.5; max-width: 92%;
+  text-align: center; pointer-events: none; backdrop-filter: blur(2px); }
+.ar-aimhud .hud-name { font-weight: 700; margin-bottom: 3px; }
+.ar-aimhud .hud-row { white-space: nowrap; }
+.ar-aimhud .hud-k { display: inline-block; width: 2.4em; color: #9fb0c0; }
+.ar-aimhud .hud-d { margin-left: 6px; font-weight: 700; color: #ffd36b; }
+.ar-aimhud .hud-row.hud-ok .hud-d { color: #7dffb0; }
+.ar-aimhud .hud-locked { margin-top: 3px; font-weight: 800; color: #7dffb0; }
+.ar-aimhud .hud-note { margin-top: 4px; font-size: 10px; color: #8a99a8; white-space: normal; }
+
 .ar-aim { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 .ar-readout { position: absolute; left: 50%; bottom: 76px; transform: translateX(-50%); text-align: center; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none; }

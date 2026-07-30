@@ -42,6 +42,7 @@
           <div class="ar-crosshair">+</div>
         </div>
         <div class="ar-scene-clone" aria-hidden="true"></div>
+        <div class="ar-aimhud" style="display:none"></div>
         <div class="ar-readout"></div>
         <div class="ar-controls">
           <button data-act="sensor" title="使用手機羅盤">🧭 羅盤</button>
@@ -58,6 +59,7 @@
       this.$ecliptic = this.root.querySelector('.ar-ecliptic');
       this.$aim = this.root.querySelector('.ar-aim');
       this.$readout = this.root.querySelector('.ar-readout');
+      this.$aimhud = this.root.querySelector('.ar-aimhud');
       this.$cam = this.root.querySelector('.ar-cam');
       this.vr = false;
 
@@ -314,6 +316,10 @@
 
       this._paintAim(aim, W, H);
 
+      // 對準 HUD：手機當天線仰角/方位對準器
+      const selTgt = [...st.stations, ...st.peaks].find((t) => t.id === st.selectedId);
+      this._paintAimHud(selTgt, me, st);
+
       // VR：把整個場景複製到右眼；相機串流共用同一來源
       if (this.vr) {
         this.$clone.innerHTML = this.$scene.innerHTML;
@@ -323,6 +329,31 @@
           camB.play().catch(() => {});
         }
       }
+    }
+
+    // 對準 HUD：把手機當成天線對準器，即時比對「目前朝向」與「目標仰角/方位」
+    _paintAimHud(target, me, st) {
+      if (!target) { this.$aimhud.style.display = 'none'; return; }
+      const brg = Geo.bearing(me, target);
+      const dist = Geo.distance(me, target);
+      const obsAlt = (me.alt || 0) + (me.antenna || 0);
+      const elev = Geo.elevationAngle(obsAlt, target.alt, dist, st.settings.withCurvature, st.settings.k);
+      const dAz = ((brg - this.heading + 540) % 360) - 180; // 正=目標在右
+      const dEl = elev - this.pitch;                          // 正=需抬高
+      const azOK = Math.abs(dAz) <= 3, elOK = Math.abs(dEl) <= 1;
+      const elMsg = elOK ? '✅ 對準' : (dEl > 0 ? '抬高 ▲ ' + Math.abs(dEl).toFixed(1) + '°' : '壓低 ▼ ' + Math.abs(dEl).toFixed(1) + '°');
+      const azMsg = azOK ? '✅ 對準' : (dAz > 0 ? '右轉 ▶ ' + Math.abs(Math.round(dAz)) + '°' : '左轉 ◀ ' + Math.abs(Math.round(dAz)) + '°');
+      this.$aimhud.style.display = 'block';
+      this.$aimhud.innerHTML =
+        `<div class="hud-name">🎯 ${target.name} · ${Geo.fmtDistance(dist)}</div>` +
+        `<div class="hud-row ${elOK ? 'hud-ok' : ''}"><span class="hud-k">仰角</span>` +
+        `目前 <b>${this.pitch.toFixed(1)}°</b> → 目標 <b>${elev.toFixed(1)}°</b>` +
+        `<span class="hud-d">${elMsg}</span></div>` +
+        `<div class="hud-row ${azOK ? 'hud-ok' : ''}"><span class="hud-k">方位</span>` +
+        `目前 <b>${Math.round(this.heading)}°</b> → 目標 <b>${Math.round(brg)}° ${Geo.compass8(brg)}</b>` +
+        `<span class="hud-d">${azMsg}</span></div>` +
+        (azOK && elOK ? `<div class="hud-locked">🔒 已對準目標！</div>` : '') +
+        (!this.usingSensor ? `<div class="hud-note">桌機為模擬值；手機請按 🧭 羅盤，「目前」才是手機真實朝向</div>` : '');
     }
 
     _paintCompass(W, horizonY) {
