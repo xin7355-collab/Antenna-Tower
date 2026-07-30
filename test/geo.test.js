@@ -7,7 +7,8 @@
 require('../js/geo.js');
 require('../js/elevation.js');
 require('../js/parse.js');
-const { Geo, Elevation, Parse } = globalThis;
+require('../js/sky.js');
+const { Geo, Elevation, Parse, Sky } = globalThis;
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -127,6 +128,40 @@ function runParseTests() {
   const json = JSON.stringify({ stations: [{ id: 'j', type: 'station', name: 'J', lat: 23, lng: 121, alt: 0 }] });
   const r3 = Parse.parseStations(json, 'x.json');
   ok('JSON 取代模式', r3.mode === 'replace' && r3.stations.length === 1);
+
+  console.log('parse — 萬用座標');
+  const coordCases = [
+    ['23.47, 120.957', 23.47, 120.957],
+    ['N23.47 E120.957', 23.47, 120.957],
+    ['23.47N, 120.957E', 23.47, 120.957],
+    ["23°28'12\"N 120°57'25\"E", 23.47, 120.9569],
+    ['23 28 12 N, 120 57 25 E', 23.47, 120.9569],
+    ['S23.47 W120.957', -23.47, -120.957],
+  ];
+  coordCases.forEach(([s, la, lo]) => {
+    const r = Parse.parseLatLng(s);
+    ok('座標 ' + s, r && approx(r.lat, la, 0.01) && approx(r.lng, lo, 0.01));
+  });
+  ok('無效座標回傳 null', Parse.parseLatLng('abc') === null && Parse.parseLatLng('999,999') === null);
+
+  console.log('sky — 天文位置');
+  const jd0 = Sky.julianDate(new Date(Date.UTC(2000, 0, 1, 12, 0, 0)));
+  const sun0 = Sky.sunEqu(jd0);
+  ok('太陽@J2000 RA ~281.3°', approx(sun0.ra, 281.3, 0.5));
+  ok('太陽@J2000 Dec ~-23.0°', approx(sun0.dec, -23.0, 0.3));
+  const objs = Sky.skyObjects(new Date(Date.UTC(2026, 5, 21, 4, 0, 0)), 25.03, 121.56);
+  const pol = objs.find((o) => o.name.includes('Polaris'));
+  ok('北極星仰角 ≈ 緯度', approx(pol.alt, 25.03, 1.0));
+  ok('北極星方位 ≈ 北', pol.az < 3 || pol.az > 357);
+  ok('五大行星皆計算', objs.filter((o) => o.type === 'planet').length === 5);
+  ok('所有天體 alt/az 在範圍內', objs.every((o) => o.alt >= -90 && o.alt <= 90 && o.az >= 0 && o.az <= 360));
+
+  console.log('sky — 衛星視角');
+  const over = Sky.lookAngles({ lat: 25, lng: 121, alt: 0 }, { lat: 25, lng: 121, altKm: 420 });
+  ok('衛星正上方 → 仰角 ~90°', approx(over.el, 90, 0.5));
+  ok('衛星正上方 → 距離 ~420 km', approx(over.rangeKm, 420, 5));
+  const north = Sky.lookAngles({ lat: 25, lng: 121, alt: 0 }, { lat: 28, lng: 121, altKm: 420 });
+  ok('衛星偏北 → 方位 ~0°(北)', north.az < 3 || north.az > 357);
 
   console.log(`\n結果：${pass} 通過，${fail} 失敗`);
   process.exit(fail ? 1 : 0);

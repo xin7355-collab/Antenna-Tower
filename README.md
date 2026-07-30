@@ -21,6 +21,10 @@
 | 一次看全部 | 「分析全部」計算所有站台，依路徑品質排序、標出最佳中繼台 ⭐ |
 | 涵蓋範圍 | 依無線電視距畫涵蓋圈；或「計算地形涵蓋」畫出考慮地形遮蔽的多邊形（無線電陰影） |
 | 自訂資料 | 新增/編輯/刪除站台、GPS 定位、localStorage 保存、JSON/CSV/GPX 匯入、JSON 匯出 |
+| 萬用座標 | 貼上任何格式（十進位/度分秒 DMS/度分/N-S-E-W/各種符號）自動辨識 |
+| AR 互動 | 點擊畫面上的山/天體即對準；⛶ 全螢幕；🥽 VR 左右雙眼分割（Cardboard） |
+| 🌌 天空 | 依日期時間+位置疊加太陽、月亮（含相位）、五大行星、亮星與黃道線 |
+| 🛰 衛星 | ISS 即時位置換算方位/仰角疊加 AR |
 
 ## 三個核心視角
 
@@ -88,7 +92,7 @@ python3 -m http.server 8000
 數學與解析邏輯有無相依的單元測試（Node 內建，免安裝）：
 
 ```bash
-node test/geo.test.js     # 30 項：距離/方位/連結預算/遮蔽/Deygout/涵蓋/匯入
+node test/geo.test.js     # 46 項：距離/方位/連結預算/遮蔽/Deygout/涵蓋/匯入/座標/天文/衛星
 ```
 
 ## 檔案結構
@@ -98,10 +102,11 @@ index.html            介面骨架與分頁
 css/style.css         樣式
 js/geo.js             地理/RF 數學（距離、方位、仰角、曲率、視距、菲涅耳、FSPL、繞射）
 js/elevation.js       高程 API + 地形剖面 + 遮蔽分析 + Deygout + 涵蓋多邊形
-js/parse.js           匯入解析（JSON / CSV / GPX）
+js/parse.js           匯入解析（JSON / CSV / GPX）+ 萬用座標解析
+js/sky.js             天文層：太陽/月亮/行星/亮星/衛星視角換算
 js/data.js            範例站台/山峰資料（座標為概略值，請自行校正）
 js/map.js             Leaflet 地圖視角（路徑、涵蓋圈、地形涵蓋多邊形）
-js/ar.js              AR/VR 全景視角
+js/ar.js              AR/VR 全景視角（陸地 + 天文 + 衛星、全螢幕、雙眼分割）
 js/app.js             主控制器
 test/geo.test.js      單元測試
 vendor/leaflet/       內建 Leaflet（免 CDN）
