@@ -50,6 +50,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .opts .chk { flex-direction: row; align-items: center; gap: 5px; align-self: end; }
 .opts select, .opts input { background: #1a2029; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 4px 6px; }
 
+.sky-hint { font-size: 12px; color: #7dffcf; margin: 2px 0 8px; line-height: 1.5; min-height: 1px; }
+.sky-hint:empty { display: none; }
 .adv { margin: 0 0 10px; font-size: 12px; }
 .adv summary { cursor: pointer; color: #9fb0c0; padding: 4px 0; }
 .adv .opts { margin: 4px 0 0; }

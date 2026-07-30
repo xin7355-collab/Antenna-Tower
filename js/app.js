@@ -434,7 +434,12 @@
     document.getElementById('opt-cov').onchange = (e) => { state.settings.showCoverage = e.target.checked; updateCoverage(); };
 
     // 天文層
-    document.getElementById('opt-sky').onchange = (e) => { state.settings.showSky = e.target.checked; saveState(); skyTicker(); render(); };
+    document.getElementById('opt-sky').onchange = (e) => {
+      state.settings.showSky = e.target.checked;
+      saveState(); skyTicker(); render();
+      if (e.target.checked) { showARTab(); faceBestSky(); }
+      else setSkyHint('');
+    };
     document.getElementById('opt-skytime').onchange = (e) => {
       state.settings.skyTime = e.target.value ? new Date(e.target.value).toISOString() : null;
       saveState(); render();
@@ -445,7 +450,12 @@
       saveState(); render();
     };
     document.getElementById('opt-starmag').onchange = (e) => { state.settings.starMag = parseFloat(e.target.value); saveState(); render(); };
-    document.getElementById('opt-sat').onchange = (e) => { state.settings.showSat = e.target.checked; saveState(); satTicker(); };
+    document.getElementById('opt-sat').onchange = (e) => {
+      state.settings.showSat = e.target.checked;
+      saveState(); satTicker(); render();
+      if (e.target.checked) { showARTab(); setSkyHint('🛰 取得 ISS 位置中…（若在地平線下會顯示於地面方向）'); }
+      else setSkyHint('');
+    };
     document.getElementById('opt-freq').onchange = (e) => {
       state.settings.freqMHz = parseFloat(e.target.value) || 145.7;
       if (state.selectedId) select(state.selectedId);
@@ -547,6 +557,29 @@
         else if (b.dataset.view === 'view-ar' && arView) setTimeout(() => arView.repaint(), 60);
       };
     });
+  }
+
+  // ---- 天空輔助：切到 AR、自動轉向可見天體、提示方向 --------------------
+  function setSkyHint(txt) {
+    const el = document.getElementById('sky-hint');
+    if (el) el.textContent = txt || '';
+  }
+  function showARTab() {
+    const arTab = document.querySelector('.tab[data-view="view-ar"]');
+    if (arTab && !arTab.classList.contains('on')) arTab.click();
+  }
+  function faceBestSky() {
+    if (!state.settings.showSky || !global.Sky || !arView) return;
+    const date = state.settings.skyTime ? new Date(state.settings.skyTime) : new Date();
+    const objs = Sky.skyObjects(date, state.me.lat, state.me.lng,
+      { maxMag: state.settings.starMag != null ? state.settings.starMag : 2.2 });
+    const up = objs.filter((o) => o.alt > 3);
+    if (!up.length) { setSkyHint('目前沒有明顯天體在地平線以上——試著在「天空」進階裡改「時間」到夜晚。'); return; }
+    // 優先：太陽 > 月亮 > 最亮者
+    const pick = up.find((o) => o.type === 'sun') || up.find((o) => o.type === 'moon')
+      || up.slice().sort((a, b) => (a.mag == null ? 9 : a.mag) - (b.mag == null ? 9 : b.mag))[0];
+    arView.lookAt(pick.az, Math.max(0, pick.alt)); // 桌機轉向；手機感測器模式不干預
+    setSkyHint(`👉 ${pick.name}：往 方位 ${Math.round(pick.az)}° ${Geo.compass8(pick.az)}、仰角 ${Math.round(pick.alt)}° 看（共 ${up.length} 個天體在地平線上）`);
   }
 
   // ---- 地圖回呼 ----------------------------------------------------------

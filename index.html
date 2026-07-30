@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>高山無線電站台 VR 地圖</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📡</text></svg>" />
+  <meta http-equiv="Cache-Control" content="no-cache" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
-  <link rel="stylesheet" href="css/style.css" />
+  <!-- 快取破除：每次載入都抓最新樣式，避免瀏覽器沿用舊版 -->
+  <script>document.write('<link rel="stylesheet" href="css/style.css?v=' + Date.now() + '">');</script>
 </head>
 <body>
   <header class="topbar">
@@ -59,6 +61,7 @@
         <label class="chk"><input id="opt-sky" type="checkbox" /> 🌌 天空</label>
         <label class="chk"><input id="opt-sat" type="checkbox" /> 🛰 衛星</label>
       </div>
+      <div id="sky-hint" class="sky-hint"></div>
 
       <details class="adv" id="sky-adv">
         <summary>天空：太陽/月亮/行星/星星</summary>
@@ -113,13 +116,15 @@
   </main>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script src="js/geo.js"></script>
-  <script src="js/elevation.js"></script>
-  <script src="js/parse.js"></script>
-  <script src="js/sky.js"></script>
-  <script src="js/data.js"></script>
-  <script src="js/map.js"></script>
-  <script src="js/ar.js"></script>
-  <script src="js/app.js"></script>
+  <!-- 快取破除：每次載入都以時間戳抓最新程式，確保拿到最新修正 -->
+  <script>
+    (function () {
+      var v = Date.now();
+      ['js/geo.js', 'js/elevation.js', 'js/parse.js', 'js/sky.js', 'js/data.js',
+       'js/map.js', 'js/ar.js', 'js/app.js'].forEach(function (f) {
+        document.write('<script src="' + f + '?v=' + v + '"><\/script>');
+      });
+    })();
+  </script>
 </body>
 </html>
