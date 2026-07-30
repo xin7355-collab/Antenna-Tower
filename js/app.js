@@ -108,6 +108,9 @@
       `<label>緯度<input data-f="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
       `<label>經度<input data-f="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
       `</div>` +
+      `<div class="ed-move">` +
+      `<input id="ed-movecoord" type="text" placeholder="貼座標把此站台移過去（如 24.28,121.03）" />` +
+      `<button id="ed-movebtn">移動</button></div>` +
       `<div class="ed-btns">` +
       `<button id="ed-viewshed">🗺️ 計算地形涵蓋</button>` +
       `<button id="ed-del" class="danger">刪除此站台</button></div>` +
@@ -140,6 +143,27 @@
         if (t.type !== 'me') select(t.id);
       };
     });
+    // 貼座標把此站台移過去
+    const moveBtn = document.getElementById('ed-movebtn');
+    const moveInp = document.getElementById('ed-movecoord');
+    const doMove = () => {
+      const ll = Parse.parseLatLng(moveInp.value);
+      if (!ll) { alert('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）'); return; }
+      t.lat = ll.lat; t.lng = ll.lng;
+      t.alt = 0;                         // 高度重抓
+      state.analysisById = {};
+      moveInp.value = '';
+      saveState();
+      render();
+      select(t.id);
+      if (mapView.focus) mapView.focus(t);
+      Elevation.elevationAt(t).then((e) => {
+        if (e != null) { t.alt = Math.round(e); saveState(); render(); if (state.selectedId === t.id) select(t.id); }
+      }).catch(() => {});
+    };
+    moveBtn.onclick = doMove;
+    moveInp.onkeydown = (e) => { if (e.key === 'Enter') doMove(); };
+
     document.getElementById('ed-viewshed').onclick = () => computeViewshed(t);
     document.getElementById('ed-del').onclick = () => {
       if (!confirm(`確定刪除「${t.name}」？`)) return;

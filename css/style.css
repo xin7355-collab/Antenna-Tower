@@ -42,6 +42,9 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
 .ed-grid label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }
 .ed-grid input { background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; }
+.ed-move { display: flex; gap: 6px; margin-top: 8px; }
+.ed-move input { flex: 1; min-width: 0; background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+.ed-move button { background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
 .ed-btns { margin-top: 10px; display: flex; gap: 6px; }
 .ed-btns button { flex: 1; border-radius: 6px; padding: 6px; cursor: pointer; font-size: 12px; }
 .ed-btns #ed-viewshed { background: #26344a; color: #cfe0f5; border: 1px solid #33507a; }
