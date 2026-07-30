@@ -81,7 +81,23 @@
   function renderEditor() {
     const el = document.getElementById('editor');
     const t = findEntity(state.selectedId);
-    if (!t || t.type !== 'station') { el.innerHTML = ''; return; }
+    if (!t || t.type !== 'station') { el.innerHTML = ''; el.dataset.eid = ''; return; }
+
+    // 同一站台且編輯器已存在：就地更新欄位值，且「不碰使用者正在編輯的欄位」，
+    // 避免背景重繪（衛星/天空每幾秒更新）把你正在輸入的座標沖掉。
+    if (el.dataset.eid === t.id && el.querySelector('input[data-f]')) {
+      el.querySelectorAll('input[data-f]').forEach((inp) => {
+        if (inp === document.activeElement) return; // 正在打字的欄位保持不動
+        const f = inp.dataset.f;
+        const val = f === 'name' ? t.name
+          : (f === 'lat' || f === 'lng') ? Number(t[f]).toFixed(5)
+          : (t[f] != null ? t[f] : '');
+        if (String(inp.value) !== String(val)) inp.value = val;
+      });
+      return;
+    }
+
+    el.dataset.eid = t.id;
     el.innerHTML =
       `<div class="ed-title">✏️ 編輯站台</div>` +
       `<div class="ed-grid">` +
