@@ -34,8 +34,13 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
 .ed-grid label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }
 .ed-grid input { background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; }
-.ed-btns { margin-top: 10px; }
-.ed-btns .danger { width: 100%; background: #431a1a; color: #ff8080; border: 1px solid #6b2626; border-radius: 6px; padding: 6px; cursor: pointer; }
+.ed-btns { margin-top: 10px; display: flex; gap: 6px; }
+.ed-btns button { flex: 1; border-radius: 6px; padding: 6px; cursor: pointer; font-size: 12px; }
+.ed-btns #ed-viewshed { background: #26344a; color: #cfe0f5; border: 1px solid #33507a; }
+.ed-btns .danger { background: #431a1a; color: #ff8080; border: 1px solid #6b2626; }
+.ed-vs-status { font-size: 11px; margin-top: 6px; min-height: 12px; }
+.ed-vs-status .ok { color: #35d07f; }
+.ed-vs-status .warn { color: #f5b942; }
 
 .opts { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; font-size: 12px; }
 .opts label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }

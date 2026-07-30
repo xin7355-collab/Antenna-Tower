@@ -31,6 +31,7 @@
       this.markers = new Map();
       this.pathLayer = null;
       this.coverageLayer = null;
+      this.viewshedLayer = null;
 
       const L = global.L;
       this.L = L;
@@ -129,6 +130,19 @@
         })
       );
       this.coverageLayer = L.layerGroup(layers).addTo(this.map);
+    }
+
+    /**
+     * 顯示地形感知涵蓋多邊形。latlngs = [[lat,lng],...]；傳 null 即清除。
+     */
+    setViewshed(latlngs, color = '#f5b942') {
+      if (this.viewshedLayer) { this.map.removeLayer(this.viewshedLayer); this.viewshedLayer = null; }
+      if (!latlngs || latlngs.length < 3) return;
+      const L = this.L;
+      this.viewshedLayer = L.polygon(latlngs, {
+        color, weight: 2, fillColor: color, fillOpacity: 0.18, dashArray: '4 3',
+      }).addTo(this.map);
+      this.map.fitBounds(this.viewshedLayer.getBounds().pad(0.2));
     }
 
     focus(ent) {

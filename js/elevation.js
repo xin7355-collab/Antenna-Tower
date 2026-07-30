@@ -193,8 +193,66 @@
     };
   }
 
+  /**
+   * 地形感知涵蓋多邊形：從中心站台向四周發射 azimuths 條射線，
+   * 每條找出「地面視線第一次被地形擋住」的距離，串成多邊形。
+   * 假設接收端天線離地 rxHeight 公尺。回傳 [[lat,lng], ...]。
+   */
+  async function computeCoveragePolygon(center, opts = {}) {
+    const {
+      antenna = 6, rxHeight = 10, k = Geo.K_DEFAULT,
+      azimuths = 24, samples = 24, maxRangeKm = 150,
+    } = opts;
+    const maxRangeM = Math.min(
+      maxRangeKm * 1000,
+      (Geo.radioHorizonKm((center.alt || 0) + antenna, k) + Geo.radioHorizonKm(rxHeight, k)) * 1000
+    );
+
+    // 1) 佈點：每條射線由中心向外等距取樣
+    const rays = [];
+    for (let i = 0; i < azimuths; i++) {
+      const az = (360 / azimuths) * i;
+      const pts = [{ lat: center.lat, lng: center.lng, dist: 0 }];
+      for (let s = 1; s <= samples; s++) {
+        const d = (maxRangeM * s) / samples;
+        const p = Geo.destination(center, az, d);
+        pts.push({ lat: p.lat, lng: p.lng, dist: d });
+      }
+      rays.push({ az, pts });
+    }
+
+    // 2) 一次批次查詢所有點的高程
+    const flat = rays.flatMap((r) => r.pts);
+    const elevs = await fetchElevations(flat);
+    let idx = 0;
+    rays.forEach((r) => r.pts.forEach((p) => { p.ground = elevs[idx++]; }));
+
+    // 3) 每條射線找第一次被擋的距離
+    const centerGround = rays[0].pts[0].ground ?? (center.alt || 0);
+    const h1 = centerGround + antenna;
+    return rays.map((r) => {
+      const P = r.pts;
+      let covDist = 0;
+      for (let ri = 1; ri < P.length; ri++) {
+        const D = P[ri].dist;
+        const hR = (P[ri].ground ?? 0) + rxHeight;
+        let clear = true;
+        for (let m = 1; m < ri; m++) {
+          const d1 = P[m].dist, d2 = D - d1;
+          const bulge = Geo.earthBulge(d1, d2, k);
+          const los = h1 + ((hR - h1) * d1) / D;
+          if (los - ((P[m].ground ?? 0) + bulge) < 0) { clear = false; break; }
+        }
+        if (clear) covDist = D; else break; // 第一次被擋 → 該方向涵蓋止於此
+      }
+      const v = Geo.destination(center, r.az, Math.max(covDist, maxRangeM * 0.02));
+      return [v.lat, v.lng];
+    });
+  }
+
   global.Elevation = {
     fetchElevations, elevationAt, buildProfile, analyzePath, deygoutLossDb,
+    computeCoveragePolygon,
     _cache: cache,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

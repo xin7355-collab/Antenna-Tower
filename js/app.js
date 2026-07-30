@@ -74,7 +74,10 @@
       `<label>緯度<input data-f="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
       `<label>經度<input data-f="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
       `</div>` +
-      `<div class="ed-btns"><button id="ed-del" class="danger">刪除此站台</button></div>`;
+      `<div class="ed-btns">` +
+      `<button id="ed-viewshed">🗺️ 計算地形涵蓋</button>` +
+      `<button id="ed-del" class="danger">刪除此站台</button></div>` +
+      `<div id="ed-vs-status" class="ed-vs-status"></div>`;
 
     el.querySelectorAll('input[data-f]').forEach((inp) => {
       inp.onchange = () => {
@@ -86,6 +89,7 @@
         if (t.type !== 'me') select(t.id);
       };
     });
+    document.getElementById('ed-viewshed').onclick = () => computeViewshed(t);
     document.getElementById('ed-del').onclick = () => {
       if (!confirm(`確定刪除「${t.name}」？`)) return;
       state.stations = state.stations.filter((s) => s.id !== t.id);
@@ -199,6 +203,31 @@
       `（接收約 ${rxPower.toFixed(0)} dBm / 靈敏度 ${sens} dBm）</div>`);
     rows.push(`<div class="sub">理論無線電視距上限：約 ${horizon.toFixed(0)} km</div>`);
     info.innerHTML = rows.join('');
+  }
+
+  // ---- 地形感知涵蓋多邊形 ------------------------------------------------
+  let computingVs = false;
+  async function computeViewshed(station) {
+    if (computingVs || !mapView.setViewshed) return;
+    computingVs = true;
+    const el = document.getElementById('ed-vs-status');
+    if (el) el.textContent = '⏳ 發射射線、計算地形遮蔽中…';
+    try {
+      const poly = await Elevation.computeCoveragePolygon(station, {
+        antenna: station.antenna || state.settings.tgtAntenna,
+        rxHeight: RX_H,
+        freqMHz: station.freqMHz || state.settings.freqMHz,
+        k: state.settings.k,
+      });
+      mapView.setViewshed(poly, '#f5b942');
+      if (el) el.innerHTML = `<span class="ok">✓ 已畫出「${station.name}」地形涵蓋（黃色虛線）</span>`;
+      // 切到地圖分頁以便看到結果
+      const mapTab = document.querySelector('.tab[data-view="view-map"]');
+      if (mapTab) mapTab.click();
+    } catch (err) {
+      if (el) el.innerHTML = `<span class="warn">⚠️ 計算失敗：${err.message}（需連線 open-meteo.com）</span>`;
+    }
+    computingVs = false;
   }
 
   // ---- 一鍵分析全部站台 --------------------------------------------------
@@ -457,7 +486,7 @@
         throw new Error('Leaflet 未載入');
       }
     } catch (err) {
-      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, focus() {}, map: { invalidateSize() {} } };
+      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, focus() {}, map: { invalidateSize() {} } };
       const el = document.getElementById('map');
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }
