@@ -544,6 +544,7 @@
         b.classList.add('on');
         document.getElementById(b.dataset.view).classList.add('on');
         if (b.dataset.view === 'view-map') setTimeout(() => mapView.map.invalidateSize(), 60);
+        else if (b.dataset.view === 'view-ar' && arView) setTimeout(() => arView.repaint(), 60);
       };
     });
   }

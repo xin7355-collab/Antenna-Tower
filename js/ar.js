@@ -89,7 +89,13 @@
       this.root.querySelector('[data-act="full"]').onclick = () => this.toggleFullscreen();
       this.root.querySelector('[data-act="vr"]').onclick = () => this.toggleVR();
       document.addEventListener('fullscreenchange', () => setTimeout(() => this._paint(), 100));
+      // 尺寸/方向改變時重繪，避免殘留壞掉的版面
+      window.addEventListener('resize', () => this._paint());
+      window.addEventListener('orientationchange', () => { setTimeout(() => this._paint(), 250); });
     }
+
+    /** 供外部（切回 AR 分頁時）重新繪製 */
+    repaint() { this._paint(); }
 
     toggleFullscreen() {
       const el = this.root;
@@ -202,6 +208,9 @@
 
     _paint() {
       if (!this.state) return;
+      // 視角被隱藏（切到地圖分頁）時尺寸為 0，若此時重繪會把版面算壞，
+      // 導致切回來「一半黑」。直接略過，等重新可見時再繪。
+      if (!this.root.clientWidth || !this.root.clientHeight) return;
       const st = this.state;
       const me = st.me;
       const H = this.root.clientHeight;
