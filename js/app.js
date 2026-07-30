@@ -37,6 +37,19 @@
     return [state.me, ...state.stations, ...state.peaks].find((e) => e.id === id) || null;
   }
 
+  // 設定我的位置：立即更新畫面，高程與遮蔽在背景補上（不卡 UI）
+  function setMyLocation(lat, lng) {
+    state.me.lat = lat;
+    state.me.lng = lng;
+    state.analysisById = {};
+    saveState();
+    if (mapView.focus) mapView.focus(state.me);
+    render();                               // 立刻反應
+    Elevation.elevationAt(state.me).then((e) => {
+      if (e != null) { state.me.alt = Math.round(e); saveState(); renderPanel(); if (state.selectedId) select(state.selectedId); }
+    }).catch(() => {});
+  }
+
   // ---- 本機儲存 ----------------------------------------------------------
   function saveState() {
     try {
@@ -90,13 +103,17 @@
         if (f === 'name') {
           t.name = inp.value;
         } else if (f === 'lat' || f === 'lng') {
-          // 若貼上的是「整對」座標，兩欄一起設；否則解析單一分量（支援 DMS）
-          const pair = Parse.parseLatLng(inp.value);
-          if (pair && /[,nsewNSEW]/.test(inp.value) && /\d.*[\s,].*\d/.test(inp.value.replace(/[°'"]/g, ''))) {
+          const raw = inp.value.trim();
+          // 只有「明確是一整對」時才兩欄一起設：含逗號，或同時有 N/S 與 E/W
+          const isPair = /,/.test(raw) || (/[ns]/i.test(raw) && /[ew]/i.test(raw));
+          const pair = isPair ? Parse.parseLatLng(raw) : null;
+          if (pair) {
             t.lat = pair.lat; t.lng = pair.lng;
           } else {
-            const v = Parse.parseCoordComponent(inp.value);
-            if (v != null) t[f] = v;
+            // 單一數值：有度分秒符號/字母才用 DMS，否則當純小數
+            const v = /[°'"nsewNSEW]/.test(raw) ? Parse.parseCoordComponent(raw) : parseFloat(raw);
+            const limit = f === 'lat' ? 90 : 180;
+            if (v != null && isFinite(v) && Math.abs(v) <= limit) t[f] = v;
           }
         } else {
           t[f] = parseFloat(inp.value);
@@ -498,31 +515,23 @@
 
     document.getElementById('btn-analyze-all').onclick = () => analyzeAll();
 
-    // 萬用座標：貼上任何格式套用到我的位置
-    const applyPaste = async () => {
+    // 萬用座標：貼上任何格式套用到我的位置（立即反應，高程在背景補上）
+    const applyPaste = () => {
       const inp = document.getElementById('paste-coord');
       const ll = Parse.parseLatLng(inp.value);
       if (!ll) { alert('無法辨識座標格式，請再確認'); return; }
-      state.me.lat = ll.lat; state.me.lng = ll.lng;
-      state.analysisById = {};
-      try { const e = await Elevation.elevationAt(state.me); if (e != null) state.me.alt = Math.round(e); } catch (_) {}
-      saveState();
-      if (mapView.focus) mapView.focus(state.me);
-      render();
-      inp.value = '';
+      inp.value = '';                       // 先清空，立刻給回饋
+      setMyLocation(ll.lat, ll.lng);
     };
     document.getElementById('btn-paste').onclick = applyPaste;
     document.getElementById('paste-coord').onkeydown = (e) => { if (e.key === 'Enter') applyPaste(); };
 
     document.getElementById('btn-locate').onclick = () => {
       if (!navigator.geolocation) return alert('此裝置不支援定位');
-      navigator.geolocation.getCurrentPosition(async (pos) => {
-        state.me.lat = pos.coords.latitude;
-        state.me.lng = pos.coords.longitude;
-        try { const e = await Elevation.elevationAt(state.me); if (e != null) state.me.alt = Math.round(e); } catch (_) {}
-        mapView.focus(state.me);
-        render();
-      }, () => alert('定位失敗'));
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setMyLocation(pos.coords.latitude, pos.coords.longitude),
+        () => alert('定位失敗')
+      );
     };
 
     syncControls();
@@ -542,27 +551,31 @@
   // ---- 地圖回呼 ----------------------------------------------------------
   const handlers = {
     onSelect: (id) => select(id),
-    onMove: async (id, lat, lng) => {
+    onMove: (id, lat, lng) => {
       const ent = findEntity(id);
       if (!ent) return;
       ent.lat = lat; ent.lng = lng;
       state.analysisById = {}; // 位置變了，重算
-      if (ent.type === 'me') {
-        try { const e = await Elevation.elevationAt(ent); if (e != null) ent.alt = Math.round(e); } catch (_) {}
-      }
       saveState();
-      render();
+      render();                 // 立刻反應
       if (state.selectedId) select(state.selectedId);
+      // 高程在背景補上
+      Elevation.elevationAt(ent).then((e) => {
+        if (e != null) { ent.alt = Math.round(e); saveState(); renderPanel(); if (state.selectedId) select(state.selectedId); }
+      }).catch(() => {});
     },
-    onAddStation: async (lat, lng) => {
+    onAddStation: (lat, lng) => {
       const name = prompt('新增無線電站台名稱：', `站台 ${state.stations.length + 1}`);
       if (name == null) return;
       const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz };
-      try { const e = await Elevation.elevationAt(st); if (e != null) st.alt = Math.round(e); } catch (_) {}
       state.stations.push(st);
       saveState();
       render();
       select(st.id);
+      // 高程在背景補上
+      Elevation.elevationAt(st).then((e) => {
+        if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
+      }).catch(() => {});
     },
   };
 
