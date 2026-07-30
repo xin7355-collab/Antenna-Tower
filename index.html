@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>高山無線電站台 VR 地圖</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">📡 高山無線電站台 VR 地圖</div>
+    <nav class="tabs">
+      <button class="tab on" data-view="view-ar">AR 視角</button>
+      <button class="tab" data-view="view-map">地圖</button>
+    </nav>
+  </header>
+
+  <main class="stage">
+    <!-- AR / VR 全景視角 -->
+    <section id="view-ar" class="view on"></section>
+    <!-- 地圖 -->
+    <section id="view-map" class="view"><div id="map"></div></section>
+
+    <!-- 側邊資訊面板 -->
+    <aside class="panel">
+      <div class="me-box">
+        <div class="me-title">📍 我的位置 <button id="btn-locate" title="使用 GPS 定位">定位</button></div>
+        <div id="me-coord" class="me-coord"></div>
+      </div>
+
+      <div class="opts">
+        <label>頻率
+          <select id="opt-freq">
+            <option value="145.7">VHF 145.7 MHz</option>
+            <option value="438.5">UHF 438.5 MHz</option>
+            <option value="27.5">CB 27 MHz</option>
+            <option value="900">900 MHz</option>
+          </select>
+        </label>
+        <label>我方天線(m)
+          <input id="opt-ant" type="number" value="3" min="0" max="100" step="1" />
+        </label>
+        <label class="chk"><input id="opt-curv" type="checkbox" checked /> 地球曲率</label>
+      </div>
+
+      <div class="los-box">
+        <div class="los-title">路徑分析</div>
+        <div id="los-status" class="los-status">選一個站台開始…</div>
+        <canvas id="profile" class="profile"></canvas>
+        <div class="legend">
+          <span><i class="lg lg-ground"></i>地形</span>
+          <span><i class="lg lg-fresnel"></i>菲涅耳區</span>
+          <span><i class="lg lg-los"></i>視線</span>
+        </div>
+      </div>
+
+      <div class="list-box">
+        <div class="list-title">站台 / 山峰（點選目標）</div>
+        <ul id="target-list" class="target-list"></ul>
+        <div class="tip">💡 在地圖上點空白處可新增站台；拖曳「📍我的位置」可移動。</div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="js/geo.js"></script>
+  <script src="js/elevation.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/ar.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
