@@ -1,0 +1,57 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build release APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Rename APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk out/tower-aim.apk
+          ls -la out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tower-aim-apk
+          path: out/tower-aim.apk
+
+      - name: Publish to "apk" release (always latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk
+          name: 塔臺對準儀 APK（最新版）
+          body: |
+            Android 安裝檔。手機瀏覽器點下方 `tower-aim.apk` 即可下載安裝
+            （安裝時需允許「安裝未知來源的應用程式」）。
+
+            此版本為 WebView 包裝，內容即線上版，每次開啟自動取得最新功能。
+          files: out/tower-aim.apk
+          make_latest: true

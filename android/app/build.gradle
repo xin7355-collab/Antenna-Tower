@@ -1,0 +1,31 @@
+plugins { id 'com.android.application' }
+
+android {
+  namespace 'tw.toweraim'
+  compileSdk 34
+
+  defaultConfig {
+    applicationId "tw.toweraim"
+    minSdk 24
+    targetSdk 34
+    versionCode 1
+    versionName "1.0"
+  }
+
+  buildTypes {
+    // 以 debug 金鑰簽章即可側載安裝（個人使用）
+    release {
+      minifyEnabled false
+      signingConfig signingConfigs.debug
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+dependencies {
+  implementation 'androidx.appcompat:appcompat:1.7.0'
+}
