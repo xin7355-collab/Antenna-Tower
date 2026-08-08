@@ -2,6 +2,7 @@ package tw.toweraim;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.View;
@@ -14,16 +15,12 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
-import androidx.activity.OnBackPressedCallback;
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-
 /**
  * 塔臺對準儀 — 以 WebView 包裝的 Android 版。
  * 載入線上版網頁，並把相機、定位、全螢幕等權限接到原生層。
+ * 刻意不使用 appcompat/androidx，零外部依賴、APK 最小、建置最快。
  */
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
   private static final String APP_URL = "https://8rknrz2dbw-ai.github.io/transcript-deck/";
   private static final int REQ_PERMS = 1001;
@@ -32,7 +29,6 @@ public class MainActivity extends AppCompatActivity {
   private FrameLayout root;
   private View fullscreenView;
   private WebChromeClient.CustomViewCallback fullscreenCb;
-  private WebChromeClient chrome;
 
   @SuppressLint("SetJavaScriptEnabled")
   @Override
@@ -47,14 +43,14 @@ public class MainActivity extends AppCompatActivity {
 
     WebSettings s = web.getSettings();
     s.setJavaScriptEnabled(true);
-    s.setDomStorageEnabled(true);          // localStorage：站臺資料保存
-    s.setGeolocationEnabled(true);         // 定位
-    s.setMediaPlaybackRequiresUserGesture(false); // 相機串流可直接播放
+    s.setDomStorageEnabled(true);                  // localStorage：站臺資料保存
+    s.setGeolocationEnabled(true);                 // 定位
+    s.setMediaPlaybackRequiresUserGesture(false);  // 相機串流可直接播放
     s.setLoadWithOverviewMode(true);
     s.setUseWideViewPort(true);
 
     web.setWebViewClient(new WebViewClient());
-    chrome = new WebChromeClient() {
+    web.setWebChromeClient(new WebChromeClient() {
       // 網頁要求相機權限 → 直接授予（App 已在系統層取得 CAMERA）
       @Override
       public void onPermissionRequest(final PermissionRequest request) {
@@ -81,38 +77,39 @@ public class MainActivity extends AppCompatActivity {
 
       @Override
       public void onHideCustomView() {
-        if (fullscreenView == null) return;
-        root.removeView(fullscreenView);
-        fullscreenView = null;
-        web.setVisibility(View.VISIBLE);
-        if (fullscreenCb != null) { fullscreenCb.onCustomViewHidden(); fullscreenCb = null; }
+        exitFullscreen();
       }
-    };
-    web.setWebChromeClient(chrome);
+    });
 
     requestNeededPermissions();
 
     if (savedInstanceState != null) web.restoreState(savedInstanceState);
     else web.loadUrl(APP_URL);
+  }
 
-    // 返回鍵：先在網頁內返回，沒得返回才離開 App
-    getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
-      @Override
-      public void handleOnBackPressed() {
-        if (fullscreenView != null) { chrome.onHideCustomView(); return; }
-        if (web.canGoBack()) web.goBack();
-        else { setEnabled(false); getOnBackPressedDispatcher().onBackPressed(); }
-      }
-    });
+  private void exitFullscreen() {
+    if (fullscreenView == null) return;
+    root.removeView(fullscreenView);
+    fullscreenView = null;
+    web.setVisibility(View.VISIBLE);
+    if (fullscreenCb != null) { fullscreenCb.onCustomViewHidden(); fullscreenCb = null; }
+  }
+
+  /** 返回鍵：先離開全螢幕，再在網頁內返回，最後才離開 App。 */
+  @Override
+  public void onBackPressed() {
+    if (fullscreenView != null) { exitFullscreen(); return; }
+    if (web.canGoBack()) { web.goBack(); return; }
+    super.onBackPressed();
   }
 
   private void requestNeededPermissions() {
     String[] want = { Manifest.permission.CAMERA, Manifest.permission.ACCESS_FINE_LOCATION };
     boolean need = false;
     for (String p : want) {
-      if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) need = true;
+      if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) need = true;
     }
-    if (need) ActivityCompat.requestPermissions(this, want, REQ_PERMS);
+    if (need) requestPermissions(want, REQ_PERMS);
   }
 
   @Override
