@@ -232,7 +232,7 @@
         const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
         const blocked = a && !a.losClear;
         cand.push({
-          id: t.id, name: t.name, kind: t.type, selected, status, stick: true,
+          id: t.id, name: t.name, kind: t.type, selected, status, stick: true, custom: !!t.custom,
           x: projX(brg), y: projY(elev),
           sub: `${t.alt} m · ${Geo.fmtDistance(dist)}`,
           prio: (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000,
@@ -289,7 +289,7 @@
 
       // 3) 依 x 由左到右輸出
       const html = placed.slice().sort((a, b) => a.x - b.x).map((c) => {
-        const cls = `arlbl arlbl-${c.kind}${c.selected ? ' arlbl-sel' : ''}${c.status ? ' arlbl-' + c.status : ''}`;
+        const cls = `arlbl arlbl-${c.kind}${c.selected ? ' arlbl-sel' : ''}${c.status ? ' arlbl-' + c.status : ''}${c.custom ? ' arlbl-custom' : ''}`;
         const stick = c.stick ? `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - c.y)}px"></i>` : '';
         return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.id}">` +
           `<span class="arlbl-name">${c.name}</span><span class="arlbl-sub">${c.sub}</span>${stick}</div>`;

@@ -1,0 +1,16 @@
+{
+  "name": "峰聯 AR — 高山無線電通聯",
+  "short_name": "峰聯 AR",
+  "description": "高山無線電站台通聯規劃、直線距離/遮蔽分析、AR 對準與天空/衛星",
+  "lang": "zh-Hant",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1116",
+  "theme_color": "#0b2545",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

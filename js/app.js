@@ -371,9 +371,11 @@
       const marginTxt = m != null ? ` · 餘裕 ${m >= 0 ? '+' : ''}${m.toFixed(0)}dB` : '';
       const sel = t.id === state.selectedId ? ' sel' : '';
       const ico = t.type === 'station' ? '📡' : '⛰️';
-      return `<li class="tgt${sel}" data-id="${t.id}">` +
+      const customCls = t.custom ? ' tgt-custom' : '';
+      const customBadge = t.custom ? '<b class="b-custom">自訂</b>' : '';
+      return `<li class="tgt${sel}${customCls}" data-id="${t.id}">` +
         `<span class="t-ico">${ico}</span>` +
-        `<span class="t-main"><b>${t.name}</b> ${badge}${star}` +
+        `<span class="t-main"><b>${t.name}</b> ${badge}${star}${customBadge}` +
         `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${t.alt}m${marginTxt}</small></span>` +
         `</li>`;
     }).join('');
@@ -611,7 +613,7 @@
       if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增站台」'); return; }
       const name = prompt('新站台名稱：', '新標點');
       if (name == null) return;
-      const st = { id: `st-${Date.now()}`, type: 'station', name: name || '新標點', lat: ll.lat, lng: ll.lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz };
+      const st = { id: `st-${Date.now()}`, type: 'station', name: name || '新標點', lat: ll.lat, lng: ll.lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
       state.stations.push(st);
       inp.value = '';
       saveState();
@@ -688,7 +690,7 @@
     onAddStation: (lat, lng) => {
       const name = prompt('新增無線電站台名稱：', `站台 ${state.stations.length + 1}`);
       if (name == null) return;
-      const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz };
+      const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
       state.stations.push(st);
       saveState();
       render();

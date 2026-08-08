@@ -6,6 +6,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 /* 頂列 */
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; background: #161b22; border-bottom: 1px solid #2a313b; }
 .brand { font-weight: 700; }
+.brand-sub { font-weight: 400; font-size: 12px; color: #9fb0c0; margin-left: 8px; }
+@media (max-width: 520px) { .brand-sub { display: none; } }
 .tabs { display: flex; gap: 6px; }
 .tab { background: #222a35; color: #cdd6df; border: 1px solid #333e4b; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
 .tab.on { background: #2f6fff; color: #fff; border-color: #2f6fff; }
@@ -88,7 +90,9 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .t-ico { font-size: 18px; }
 .t-main { display: flex; flex-direction: column; }
 .t-main small { color: #8a99a8; font-size: 11px; }
-.b-ok, .b-marg, .b-bad { font-size: 11px; padding: 0 5px; border-radius: 4px; margin-left: 4px; }
+.b-ok, .b-marg, .b-bad, .b-custom { font-size: 11px; padding: 0 5px; border-radius: 4px; margin-left: 4px; }
+.b-custom { background: #4a3410; color: #ffb247; }
+.tgt-custom .t-main > b { color: #ffb247; }   /* 自訂地點名稱用琥珀色 */
 .b-ok { background: #17402c; color: #35d07f; }
 .b-marg { background: #40340f; color: #f5b942; }
 .b-bad { background: #431a1a; color: #ff6161; }
@@ -105,6 +109,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .mk-peak .mk-lbl { background: rgba(90,70,40,.7); }
 .mk-sat .mk-lbl { background: rgba(20,80,60,.85); color: #7dffcf; }
 .mk-sat .mk-ico { font-size: 22px; }
+.mk-custom .mk-lbl { background: #a15c07; color: #fff; }   /* 自訂站台：琥珀色 */
+.mk-custom.mk-sel .mk-lbl { background: #ff9f2e; color: #1a1200; }
 
 /* ===== AR 視角 ===== */
 #view-ar { background: #0b0f14; cursor: grab; user-select: none; }
@@ -130,6 +136,7 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-sub { display: block; font-size: 10px; color: #eaf0f6; text-shadow: 0 1px 2px #000; }
 .arlbl-stick { position: absolute; left: 50%; top: 100%; width: 1px; background: rgba(255,255,255,.55); }
 .arlbl-station .arlbl-name { color: #8fd1ff; }
+.arlbl-custom .arlbl-name { color: #ffb247; }   /* 自訂站台：琥珀色 */
 .arlbl-ok .arlbl-name { color: #7dffb0; }
 .arlbl-marg .arlbl-name { color: #ffd36b; }
 .arlbl-bad .arlbl-name { color: #ff9a9a; }

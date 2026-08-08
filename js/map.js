@@ -15,7 +15,7 @@
   };
 
   function divIcon(L, entity, selected) {
-    const cls = `mk mk-${entity.type}${selected ? ' mk-sel' : ''}`;
+    const cls = `mk mk-${entity.type}${selected ? ' mk-sel' : ''}${entity.custom ? ' mk-custom' : ''}`;
     return L.divIcon({
       className: 'mk-wrap',
       html: `<div class="${cls}"><span class="mk-ico">${ICONS[entity.type] || '•'}</span>` +
