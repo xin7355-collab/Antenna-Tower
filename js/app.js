@@ -77,13 +77,13 @@
     updateCoverage();
   }
 
-  // ---- 站台編輯器 --------------------------------------------------------
+  // ---- 站臺編輯器 --------------------------------------------------------
   function renderEditor() {
     const el = document.getElementById('editor');
     const t = findEntity(state.selectedId);
     if (!t || t.type !== 'station') { el.innerHTML = ''; el.dataset.eid = ''; return; }
 
-    // 同一站台且編輯器已存在：就地更新欄位值，且「不碰使用者正在編輯的欄位」，
+    // 同一站臺且編輯器已存在：就地更新欄位值，且「不碰使用者正在編輯的欄位」，
     // 避免背景重繪（衛星/天空每幾秒更新）把你正在輸入的座標沖掉。
     if (el.dataset.eid === t.id && el.querySelector('input[data-f]')) {
       el.querySelectorAll('input[data-f]').forEach((inp) => {
@@ -94,12 +94,17 @@
           : (t[f] != null ? t[f] : '');
         if (String(inp.value) !== String(val)) inp.value = val;
       });
+      const eff = el.querySelector('.ed-eff');
+      if (eff) {
+        eff.innerHTML = `目前採用高度：<b>${Math.round(Geo.targetTopAlt(t, state.settings.tgtAntenna))} m</b>` +
+          `（${Geo.usesTrueAlt(t) ? '真實高度優先' : `海拔 ${t.alt || 0} + 天線 ${t.antenna || 0}`}）`;
+      }
       return;
     }
 
     el.dataset.eid = t.id;
     el.innerHTML =
-      `<div class="ed-title">✏️ 編輯站台</div>` +
+      `<div class="ed-title">✏️ 編輯站臺</div>` +
       `<div class="ed-grid">` +
       `<label>名稱<input data-f="name" type="text" value="${t.name.replace(/"/g, '&quot;')}"></label>` +
       `<label>海拔(m)<input data-f="alt" type="number" value="${t.alt}"></label>` +
@@ -107,13 +112,17 @@
       `<label>頻率(MHz)<input data-f="freqMHz" type="number" step="0.001" value="${t.freqMHz || ''}"></label>` +
       `<label>緯度<input data-f="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
       `<label>經度<input data-f="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
+      `<label class="ed-wide">目標真實高度(m)　<small>填了就以此為準（覆蓋 海拔+天線）；留空則用 海拔+天線</small>` +
+      `<input data-f="trueAlt" type="number" step="1" placeholder="留空＝不使用" value="${t.trueAlt != null && t.trueAlt !== '' ? t.trueAlt : ''}"></label>` +
       `</div>` +
+      `<div class="ed-eff">目前採用高度：<b>${Math.round(Geo.targetTopAlt(t, state.settings.tgtAntenna))} m</b>` +
+      `（${Geo.usesTrueAlt(t) ? '真實高度優先' : `海拔 ${t.alt || 0} + 天線 ${t.antenna || 0}`}）</div>` +
       `<div class="ed-move">` +
-      `<input id="ed-movecoord" type="text" placeholder="貼座標把此站台移過去（如 24.28,121.03）" />` +
+      `<input id="ed-movecoord" type="text" placeholder="貼座標把此站臺移過去（如 24.28,121.03）" />` +
       `<button id="ed-movebtn">移動</button></div>` +
       `<div class="ed-btns">` +
       `<button id="ed-viewshed">🗺️ 計算地形涵蓋</button>` +
-      `<button id="ed-del" class="danger">刪除此站台</button></div>` +
+      `<button id="ed-del" class="danger">刪除此站臺</button></div>` +
       `<div id="ed-vs-status" class="ed-vs-status"></div>`;
 
     el.querySelectorAll('input[data-f]').forEach((inp) => {
@@ -134,6 +143,11 @@
             const limit = f === 'lat' ? 90 : 180;
             if (v != null && isFinite(v) && Math.abs(v) <= limit) t[f] = v;
           }
+        } else if (f === 'trueAlt') {
+          // 留空＝取消覆蓋，回到「海拔 + 天線」
+          const raw = inp.value.trim();
+          if (raw === '') delete t.trueAlt;
+          else { const v = parseFloat(raw); if (isFinite(v)) t.trueAlt = v; }
         } else {
           t[f] = parseFloat(inp.value);
         }
@@ -143,7 +157,7 @@
         if (t.type !== 'me') select(t.id);
       };
     });
-    // 貼座標把此站台移過去
+    // 貼座標把此站臺移過去
     const moveBtn = document.getElementById('ed-movebtn');
     const moveInp = document.getElementById('ed-movecoord');
     const doMove = () => {
@@ -176,14 +190,14 @@
     };
   }
 
-  // 依無線電視距畫各站台涵蓋圈（假設對方天線高 RX_H 公尺）
+  // 依無線電視距畫各站臺涵蓋圈（假設對方天線高 RX_H 公尺）
   const RX_H = 10;
   function updateCoverage() {
     if (!mapView.setCoverage) return;
     if (!state.settings.showCoverage) { mapView.setCoverage([]); return; }
     const circles = state.stations.map((st) => ({
       lat: st.lat, lng: st.lng,
-      radiusM: (Geo.radioHorizonKm((st.alt || 0) + (st.antenna || 0)) + Geo.radioHorizonKm(RX_H)) * 1000,
+      radiusM: (Geo.radioHorizonKm(Geo.targetTopAlt(st, state.settings.tgtAntenna)) + Geo.radioHorizonKm(RX_H)) * 1000,
       color: st.id === state.selectedId ? '#2f6fff' : '#35d07f',
     }));
     mapView.setCoverage(circles);
@@ -199,7 +213,8 @@
       const brg = Geo.bearing(state.me, target);
       const dist = Geo.distance(state.me, target);
       const obsAlt = (state.me.alt || 0) + (state.me.antenna || 0);
-      const elev = Geo.elevationAngle(obsAlt, target.alt, dist, state.settings.withCurvature, state.settings.k);
+      const tgtTop = Geo.targetTopAlt(target, state.settings.tgtAntenna);
+      const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, state.settings.withCurvature, state.settings.k);
       arView.lookAt(brg, Math.max(0, elev));
       if (aimEl) aimEl.innerHTML =
         `🎯 <b>${target.name}</b>：AR 中往 <b>方位 ${Math.round(brg)}° ${Geo.compass8(brg)}</b>、` +
@@ -224,6 +239,7 @@
       const analysis = Elevation.analyzePath(profile, {
         obsAntenna: state.me.antenna || state.settings.obsAntenna,
         tgtAntenna: target.antenna || state.settings.tgtAntenna,
+        tgtTopAlt: Geo.usesTrueAlt(target) ? Geo.targetTopAlt(target) : null,
         freqMHz: target.freqMHz || state.settings.freqMHz,
         k: state.settings.k,
       });
@@ -261,7 +277,7 @@
   function renderLosStatus(target, a) {
     const info = document.getElementById('los-status');
     const horizon = Geo.radioHorizonKm((state.me.alt || 0) + (state.me.antenna || 0), state.settings.k)
-                  + Geo.radioHorizonKm(target.alt + (target.antenna || 0), state.settings.k);
+                  + Geo.radioHorizonKm(Geo.targetTopAlt(target, state.settings.tgtAntenna), state.settings.k);
     const worst = a.worst;
     const rows = [];
     if (a.clear) {
@@ -303,6 +319,7 @@
     try {
       const poly = await Elevation.computeCoveragePolygon(station, {
         antenna: station.antenna || state.settings.tgtAntenna,
+        topAlt: Geo.usesTrueAlt(station) ? Geo.targetTopAlt(station) : null,
         rxHeight: RX_H,
         freqMHz: station.freqMHz || state.settings.freqMHz,
         k: state.settings.k,
@@ -318,7 +335,7 @@
     computingVs = false;
   }
 
-  // ---- 一鍵分析全部站台 --------------------------------------------------
+  // ---- 一鍵分析全部站臺 --------------------------------------------------
   let analyzing = false;
   async function analyzeAll() {
     if (analyzing) return;
@@ -333,6 +350,7 @@
         state.analysisById[st.id] = Elevation.analyzePath(profile, {
           obsAntenna: state.me.antenna || state.settings.obsAntenna,
           tgtAntenna: st.antenna || state.settings.tgtAntenna,
+          tgtTopAlt: Geo.usesTrueAlt(st) ? Geo.targetTopAlt(st) : null,
           freqMHz: st.freqMHz || state.settings.freqMHz,
           k: state.settings.k,
         });
@@ -341,20 +359,20 @@
       renderPanel();
     }
     prog.textContent = failed
-      ? `完成，但 ${failed} 個站台無法取得高程（需連線 open-meteo.com）`
-      : `✓ 已分析 ${done} 個站台，依路徑品質排序`;
+      ? `完成，但 ${failed} 個站臺無法取得高程（需連線 open-meteo.com）`
+      : `✓ 已分析 ${done} 個站臺，依路徑品質排序`;
     analyzing = false;
   }
 
   // ---- 資訊面板 ----------------------------------------------------------
   function renderPanel() {
     const listEl = document.getElementById('target-list');
-    // 站台依路徑品質排序（已分析者），山峰依距離
+    // 站臺依路徑品質排序（已分析者），山峰依距離
     const stations = [...state.stations].sort((a, b) => rankScore(b) - rankScore(a));
     const peaks = [...state.peaks].sort((a, b) => Geo.distance(state.me, a) - Geo.distance(state.me, b));
     const targets = [...stations, ...peaks];
 
-    // 找出最佳可通站台（可通且餘裕最大）
+    // 找出最佳可通站臺（可通且餘裕最大）
     let best = null, bestM = -Infinity;
     stations.forEach((t) => {
       const a = state.analysisById[t.id];
@@ -366,7 +384,7 @@
       const brg = Geo.bearing(state.me, t);
       const a = state.analysisById[t.id];
       const badge = a ? (a.clear ? '<b class="b-ok">通</b>' : a.losClear ? '<b class="b-marg">繞</b>' : '<b class="b-bad">擋</b>') : '';
-      const star = t.id === best ? '<span class="star" title="最佳可通站台">⭐</span>' : '';
+      const star = t.id === best ? '<span class="star" title="最佳可通站臺">⭐</span>' : '';
       const m = a ? linkMargin(a) : null;
       const marginTxt = m != null ? ` · 餘裕 ${m >= 0 ? '+' : ''}${m.toFixed(0)}dB` : '';
       const sel = t.id === state.selectedId ? ' sel' : '';
@@ -376,7 +394,7 @@
       return `<li class="tgt${sel}${customCls}" data-id="${t.id}">` +
         `<span class="t-ico">${ico}</span>` +
         `<span class="t-main"><b>${t.name}</b> ${badge}${star}${customBadge}` +
-        `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${t.alt}m${marginTxt}</small></span>` +
+        `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${Math.round(Geo.targetTopAlt(t, state.settings.tgtAntenna))}m${Geo.usesTrueAlt(t) ? '✎' : ''}${marginTxt}</small></span>` +
         `</li>`;
     }).join('');
     listEl.querySelectorAll('.tgt').forEach((el) => {
@@ -559,7 +577,7 @@
       reader.onload = () => {
         try {
           const d = Parse.parseStations(reader.result, file.name);
-          if (!d.stations || !d.stations.length) throw new Error('找不到可匯入的站台');
+          if (!d.stations || !d.stations.length) throw new Error('找不到可匯入的站臺');
           if (d.mode === 'replace') {
             if (d.me) Object.assign(state.me, d.me);
             state.stations = d.stations;
@@ -574,14 +592,14 @@
           mapView.clearPath();
           render();
           if (mapView.focus) mapView.focus(state.me);
-          alert(`已匯入 ${d.stations.length} 個站台（${d.mode === 'replace' ? '取代' : '追加'}）`);
+          alert(`已匯入 ${d.stations.length} 個站臺（${d.mode === 'replace' ? '取代' : '追加'}）`);
         } catch (err) { alert('匯入失敗：' + err.message); }
       };
       reader.readAsText(file);
       fileInput.value = '';
     };
     document.getElementById('btn-reset').onclick = () => {
-      if (!confirm('還原為預設站台資料？（會清除你的變更）')) return;
+      if (!confirm('還原為預設站臺資料？（會清除你的變更）')) return;
       try { localStorage.removeItem(LS_KEY); } catch (_) {}
       state.me = { ...S.me };
       state.stations = S.stations.map((s) => ({ ...s }));
@@ -606,12 +624,12 @@
     document.getElementById('btn-paste').onclick = applyPaste;
     document.getElementById('paste-coord').onkeydown = (e) => { if (e.key === 'Enter') applyPaste(); };
 
-    // 用座標新增一個標點/站台（不動我的位置）
+    // 用座標新增一個標點/站臺（不動我的位置）
     document.getElementById('btn-addstation').onclick = () => {
       const inp = document.getElementById('paste-coord');
       const ll = Parse.parseLatLng(inp.value);
-      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增站台」'); return; }
-      const name = prompt('新站台名稱：', '新標點');
+      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增站臺」'); return; }
+      const name = prompt('新站臺名稱：', '新標點');
       if (name == null) return;
       const st = { id: `st-${Date.now()}`, type: 'station', name: name || '新標點', lat: ll.lat, lng: ll.lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
       state.stations.push(st);
@@ -688,7 +706,7 @@
       }).catch(() => {});
     },
     onAddStation: (lat, lng) => {
-      const name = prompt('新增無線電站台名稱：', `站台 ${state.stations.length + 1}`);
+      const name = prompt('新增無線電站臺名稱：', `站臺 ${state.stations.length + 1}`);
       if (name == null) return;
       const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
       state.stations.push(st);
@@ -703,7 +721,7 @@
   };
 
   function init() {
-    loadState();  // 還原上次的站台/設定（若有）
+    loadState();  // 還原上次的站臺/設定（若有）
     // 地圖若載入失敗（例如缺 Leaflet），不應中斷 AR 視角與面板。
     try {
       if (global.L) {
@@ -720,7 +738,7 @@
     arView = new ARView('view-ar', handlers);
     bindControls();
     render();
-    // 預設選第一個站台展示
+    // 預設選第一個站臺展示
     if (state.stations[0]) select(state.stations[0].id);
   }
 

@@ -1,7 +1,7 @@
 /*
  * ar.js — AR / VR 全景視角
  * ------------------------------------------------------------------
- * 重現照片中的「抬頭看山」概念：把每個站台/山峰依「方位角、仰角」
+ * 重現照片中的「抬頭看山」概念：把每個站臺/山峰依「方位角、仰角」
  * 疊在地平線上，顯示名稱、海拔、直線距離，並對選定目標畫一條
  * 藍色瞄準線（含遮蔽狀態）。
  *
@@ -221,12 +221,13 @@
       let aim = null;
       const cand = [];
 
-      // 1a) 陸地目標（山/站台）
+      // 1a) 陸地目標（山/站臺）
       [...st.stations, ...st.peaks].forEach((t) => {
         const brg = Geo.bearing(me, t);
         if (Math.abs(angDiff(brg)) > HFOV / 2 + 4) return;
         const dist = Geo.distance(me, t);
-        const elev = Geo.elevationAngle(obsAlt, t.alt, dist, st.settings.withCurvature, st.settings.k);
+        const tgtTop = Geo.targetTopAlt(t, st.settings.tgtAntenna);
+        const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, st.settings.withCurvature, st.settings.k);
         const selected = t.id === st.selectedId;
         const a = st.analysisById[t.id];
         const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
@@ -234,8 +235,8 @@
         cand.push({
           id: t.id, name: t.name, kind: t.type, selected, status, stick: true, custom: !!t.custom,
           x: projX(brg), y: projY(elev),
-          sub: `${t.alt} m · ${Geo.fmtDistance(dist)}`,
-          prio: (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + t.alt - dist / 1000,
+          sub: `${Math.round(tgtTop)} m · ${Geo.fmtDistance(dist)}`,
+          prio: (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + tgtTop - dist / 1000,
           readout: () => this._geoReadout(t, dist, brg, elev, blocked),
           color: blocked ? '#e23b3b' : '#2f6fff',
         });
@@ -314,7 +315,7 @@
       const brg = Geo.bearing(me, target);
       const dist = Geo.distance(me, target);
       const obsAlt = (me.alt || 0) + (me.antenna || 0);
-      const elev = Geo.elevationAngle(obsAlt, target.alt, dist, st.settings.withCurvature, st.settings.k);
+      const elev = Geo.elevationAngle(obsAlt, Geo.targetTopAlt(target, st.settings.tgtAntenna), dist, st.settings.withCurvature, st.settings.k);
       const dAz = ((brg - this.heading + 540) % 360) - 180; // 正=目標在右
       const dEl = elev - this.pitch;                          // 正=需抬高
       const azOK = Math.abs(dAz) <= 3, elOK = Math.abs(dEl) <= 1;
@@ -365,8 +366,12 @@
       const los = !analyzed ? '' :
         (blocked ? '<div class="ro-line"><span class="ro-blocked">⛰️ 視線被地形遮蔽</span></div>'
                  : '<div class="ro-line"><span class="ro-clear">✓ 視線淨空</span></div>');
+      const top = Geo.targetTopAlt(t, (this.state && this.state.settings.tgtAntenna) || 0);
+      const altTxt = Geo.usesTrueAlt(t)
+        ? `真實高度：${Math.round(top).toLocaleString()} m`
+        : `海拔：${Math.round(top).toLocaleString()} m`;
       return `<div class="ro-name">${t.name}</div>` +
-        `<div class="ro-line">海拔：${t.alt.toLocaleString()} m　距離：${Geo.fmtDistance(dist)}</div>` +
+        `<div class="ro-line">${altTxt}　距離：${Geo.fmtDistance(dist)}</div>` +
         `<div class="ro-line">方位：${Math.round(brg)}° ${Geo.compass8(brg)}　仰角：${elev.toFixed(1)}°</div>` + los;
     }
 

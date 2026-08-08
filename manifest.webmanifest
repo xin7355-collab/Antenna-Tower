@@ -1,7 +1,7 @@
 {
-  "name": "峰聯 AR — 高山無線電通聯",
-  "short_name": "峰聯 AR",
-  "description": "高山無線電站台通聯規劃、直線距離/遮蔽分析、AR 對準與天空/衛星",
+  "name": "塔臺對準儀",
+  "short_name": "塔臺對準儀",
+  "description": "高山無線電站臺通聯規劃、直線距離/遮蔽分析、AR 對準與天空/衛星",
   "lang": "zh-Hant",
   "start_url": "./",
   "scope": "./",

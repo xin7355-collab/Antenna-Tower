@@ -4,7 +4,7 @@
  * 純字串處理，無外部相依，可獨立測試。
  * parseStations(text, filename) 依副檔名/內容判斷格式，回傳
  *   { stations:[...], me?, settings?, mode:'replace'|'append' }
- * JSON（完整狀態）→ replace；CSV/GPX（站台清單）→ append。
+ * JSON（完整狀態）→ replace；CSV/GPX（站臺清單）→ append。
  */
 (function (global) {
   'use strict';
@@ -20,12 +20,13 @@
     const delim = lines[0].includes('\t') ? '\t' : ',';
     const header = lines[0].split(delim).map((h) => h.trim().toLowerCase());
     const col = (names) => header.findIndex((h) => names.includes(h));
-    const iName = col(['name', '名稱', '站台', 'station']);
+    const iName = col(['name', '名稱', '站臺', 'station']);
     const iLat = col(['lat', 'latitude', '緯度']);
     const iLng = col(['lng', 'lon', 'long', 'longitude', '經度']);
     const iAlt = col(['alt', 'elev', 'elevation', '海拔', '高度']);
     const iAnt = col(['antenna', 'ant', '天線']);
     const iFreq = col(['freq', 'frequency', '頻率', 'mhz']);
+    const iTrue = col(['truealt', 'true_alt', 'realalt', '真實高度', '目標真實高度']);
     if (iLat < 0 || iLng < 0) throw new Error('CSV 需有經緯度欄位（lat/lng 或 緯度/經度）');
 
     const out = [];
@@ -37,11 +38,13 @@
       out.push({
         id: stationId('st-csv', i, lat),
         type: 'station',
-        name: iName >= 0 && c[iName] ? c[iName].trim() : `匯入站台${i}`,
+        name: iName >= 0 && c[iName] ? c[iName].trim() : `匯入站臺${i}`,
         lat, lng,
         alt: iAlt >= 0 ? (parseFloat(c[iAlt]) || 0) : 0,
         antenna: iAnt >= 0 ? (parseFloat(c[iAnt]) || 6) : 6,
         freqMHz: iFreq >= 0 ? (parseFloat(c[iFreq]) || undefined) : undefined,
+        ...(iTrue >= 0 && c[iTrue] != null && String(c[iTrue]).trim() !== '' && isFinite(parseFloat(c[iTrue]))
+          ? { trueAlt: parseFloat(c[iTrue]) } : {}),
       });
     }
     return out;

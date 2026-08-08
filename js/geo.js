@@ -172,6 +172,24 @@
   }
 
   /**
+   * 目標的「有效頂端海拔」(m)。
+   * 若填了「真實高度 trueAlt」（目標本身的絕對海拔，非塔臺高度），
+   * 則以它為準並覆蓋其餘設定；否則用 地面海拔 + 天線(塔臺)高度。
+   */
+  function targetTopAlt(t, defaultAntenna = 0) {
+    if (t && t.trueAlt != null && t.trueAlt !== '' && isFinite(t.trueAlt)) {
+      return Number(t.trueAlt);
+    }
+    const ant = (t && t.antenna != null && isFinite(t.antenna)) ? Number(t.antenna) : defaultAntenna;
+    return ((t && t.alt) || 0) + ant;
+  }
+
+  /** 是否採用了「真實高度」覆蓋 */
+  function usesTrueAlt(t) {
+    return !!(t && t.trueAlt != null && t.trueAlt !== '' && isFinite(t.trueAlt));
+  }
+
+  /**
    * 把公尺距離格式化為易讀字串。
    */
   function fmtDistance(m) {
@@ -187,6 +205,7 @@
     destination, samplePath,
     earthBulge, radioHorizonKm, fresnelRadius, elevationAngle,
     fsplDb, diffractionV, knifeEdgeLossDb,
+    targetTopAlt, usesTrueAlt,
     fmtDistance,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

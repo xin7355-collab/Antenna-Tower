@@ -144,6 +144,26 @@ function runParseTests() {
   });
   ok('無效座標回傳 null', Parse.parseLatLng('abc') === null && Parse.parseLatLng('999,999') === null);
 
+  console.log('geo/elevation — 目標真實高度覆蓋');
+  ok('無 trueAlt → 海拔+天線', Geo.targetTopAlt({ alt: 1000, antenna: 30 }) === 1030);
+  ok('有 trueAlt → 覆蓋為優先高度', Geo.targetTopAlt({ alt: 1000, antenna: 30, trueAlt: 3080 }) === 3080);
+  ok('trueAlt 空字串視為未填', Geo.targetTopAlt({ alt: 1000, antenna: 30, trueAlt: '' }) === 1030);
+  ok('usesTrueAlt 判斷正確',
+    Geo.usesTrueAlt({ trueAlt: 3080 }) && !Geo.usesTrueAlt({ trueAlt: '' }) && !Geo.usesTrueAlt({}));
+  {
+    const D = 50000, N = 50, prof = [];
+    for (let i = 0; i <= N; i++) prof.push({ dist: (D * i) / N, ground: i === N ? 500 : 100 });
+    const noOv = Elevation.analyzePath(prof, { obsAntenna: 3, tgtAntenna: 10, freqMHz: 145 });
+    const ov = Elevation.analyzePath(prof, { obsAntenna: 3, tgtAntenna: 10, tgtTopAlt: 3000, freqMHz: 145 });
+    ok('analyzePath 無覆蓋 h2 = 地面+天線', noOv.h2 === 510);
+    ok('analyzePath tgtTopAlt 覆蓋 h2', ov.h2 === 3000);
+  }
+  {
+    const r = Parse.parseStations('name,lat,lng,alt,真實高度\nA,23.4,120.9,1000,3080\nB,23.5,120.8,900,\n', 'x.csv');
+    ok('CSV 匯入真實高度', r.stations[0].trueAlt === 3080);
+    ok('CSV 真實高度留空則不設', r.stations[1].trueAlt === undefined);
+  }
+
   console.log('sky — 天文位置');
   const jd0 = Sky.julianDate(new Date(Date.UTC(2000, 0, 1, 12, 0, 0)));
   const sun0 = Sky.sunEqu(jd0);

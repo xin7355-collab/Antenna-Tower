@@ -122,6 +122,7 @@
    * @param profile   buildProfile() 的輸出（含端點）
    * @param opts.obsAntenna  觀測端天線離地高 (m)
    * @param opts.tgtAntenna  目標端天線離地高 (m)
+   * @param opts.tgtTopAlt   目標端「真實高度」絕對海拔 (m)；有給則覆蓋 tgtAntenna
    * @param opts.freqMHz     頻率 (MHz)，用於菲涅耳區；預設 145 (2m 業餘)
    * @param opts.k           等效地球半徑係數，預設 4/3
    *
@@ -137,6 +138,7 @@
     const {
       obsAntenna = 3,
       tgtAntenna = 3,
+      tgtTopAlt = null,
       freqMHz = 145,
       k = Geo.K_DEFAULT,
     } = opts;
@@ -145,9 +147,11 @@
     const last = profile[profile.length - 1];
     const D = last.dist;
 
-    // 端點「天線頂」海拔
+    // 端點「天線頂」海拔；目標端若指定真實高度則直接採用（覆蓋天線推算）
     const h1 = (first.ground ?? 0) + obsAntenna;
-    const h2 = (last.ground ?? 0) + tgtAntenna;
+    const h2 = (tgtTopAlt != null && isFinite(tgtTopAlt))
+      ? Number(tgtTopAlt)
+      : (last.ground ?? 0) + tgtAntenna;
 
     let worst = null;       // 淨空最小處
     let maxV = -Infinity;   // 繞射參數最大處（損耗最大）
@@ -194,18 +198,19 @@
   }
 
   /**
-   * 地形感知涵蓋多邊形：從中心站台向四周發射 azimuths 條射線，
+   * 地形感知涵蓋多邊形：從中心站臺向四周發射 azimuths 條射線，
    * 每條找出「地面視線第一次被地形擋住」的距離，串成多邊形。
    * 假設接收端天線離地 rxHeight 公尺。回傳 [[lat,lng], ...]。
    */
   async function computeCoveragePolygon(center, opts = {}) {
     const {
-      antenna = 6, rxHeight = 10, k = Geo.K_DEFAULT,
+      antenna = 6, rxHeight = 10, k = Geo.K_DEFAULT, topAlt = null,
       azimuths = 24, samples = 24, maxRangeKm = 150,
     } = opts;
+    const centerTop = (topAlt != null && isFinite(topAlt)) ? Number(topAlt) : (center.alt || 0) + antenna;
     const maxRangeM = Math.min(
       maxRangeKm * 1000,
-      (Geo.radioHorizonKm((center.alt || 0) + antenna, k) + Geo.radioHorizonKm(rxHeight, k)) * 1000
+      (Geo.radioHorizonKm(centerTop, k) + Geo.radioHorizonKm(rxHeight, k)) * 1000
     );
 
     // 1) 佈點：每條射線由中心向外等距取樣
@@ -229,7 +234,7 @@
 
     // 3) 每條射線找第一次被擋的距離
     const centerGround = rays[0].pts[0].ground ?? (center.alt || 0);
-    const h1 = centerGround + antenna;
+    const h1 = (topAlt != null && isFinite(topAlt)) ? Number(topAlt) : centerGround + antenna;
     return rays.map((r) => {
       const P = r.pts;
       let covDist = 0;

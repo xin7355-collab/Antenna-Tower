@@ -1,4 +1,4 @@
-/* style.css — 高山無線電站台 VR 地圖 */
+/* style.css — 塔臺對準儀 */
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; font-family: system-ui, "PingFang TC", "Noto Sans TC", sans-serif; }
 body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf1; overflow: hidden; }
@@ -6,8 +6,6 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 /* 頂列 */
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; background: #161b22; border-bottom: 1px solid #2a313b; }
 .brand { font-weight: 700; }
-.brand-sub { font-weight: 400; font-size: 12px; color: #9fb0c0; margin-left: 8px; }
-@media (max-width: 520px) { .brand-sub { display: none; } }
 .tabs { display: flex; gap: 6px; }
 .tab { background: #222a35; color: #cdd6df; border: 1px solid #333e4b; padding: 6px 14px; border-radius: 999px; cursor: pointer; }
 .tab.on { background: #2f6fff; color: #fff; border-color: #2f6fff; }
@@ -109,7 +107,7 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .mk-peak .mk-lbl { background: rgba(90,70,40,.7); }
 .mk-sat .mk-lbl { background: rgba(20,80,60,.85); color: #7dffcf; }
 .mk-sat .mk-ico { font-size: 22px; }
-.mk-custom .mk-lbl { background: #a15c07; color: #fff; }   /* 自訂站台：琥珀色 */
+.mk-custom .mk-lbl { background: #a15c07; color: #fff; }   /* 自訂站臺：琥珀色 */
 .mk-custom.mk-sel .mk-lbl { background: #ff9f2e; color: #1a1200; }
 
 /* ===== AR 視角 ===== */
@@ -136,7 +134,7 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-sub { display: block; font-size: 10px; color: #eaf0f6; text-shadow: 0 1px 2px #000; }
 .arlbl-stick { position: absolute; left: 50%; top: 100%; width: 1px; background: rgba(255,255,255,.55); }
 .arlbl-station .arlbl-name { color: #8fd1ff; }
-.arlbl-custom .arlbl-name { color: #ffb247; }   /* 自訂站台：琥珀色 */
+.arlbl-custom .arlbl-name { color: #ffb247; }   /* 自訂站臺：琥珀色 */
 .arlbl-ok .arlbl-name { color: #7dffb0; }
 .arlbl-marg .arlbl-name { color: #ffd36b; }
 .arlbl-bad .arlbl-name { color: #ff9a9a; }
@@ -184,3 +182,9 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
   .stage { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
   .panel { border-left: 0; border-top: 1px solid #2a313b; }
 }
+
+/* 目標真實高度欄位 */
+.ed-grid .ed-wide { grid-column: 1 / -1; }
+.ed-grid .ed-wide small { color: #6b7a89; font-size: 10px; font-weight: 400; }
+.ed-eff { margin-top: 6px; font-size: 12px; color: #9fb0c0; }
+.ed-eff b { color: #7dffb0; }

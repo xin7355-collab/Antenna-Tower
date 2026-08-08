@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>峰聯 AR — 高山無線電通聯</title>
+  <title>塔臺對準儀</title>
   <meta http-equiv="Cache-Control" content="no-cache" />
   <!-- App 圖示 / 加入主畫面（PWA） -->
   <link rel="manifest" href="manifest.webmanifest" />
@@ -11,7 +11,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="峰聯 AR" />
+  <meta name="apple-mobile-web-app-title" content="塔臺對準儀" />
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
   <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
@@ -21,7 +21,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">📡 峰聯 AR<span class="brand-sub">高山無線電通聯</span></div>
+    <div class="brand">📡 塔臺對準儀</div>
     <nav class="tabs">
       <button class="tab on" data-view="view-ar">AR 視角</button>
       <button class="tab" data-view="view-map">地圖</button>
@@ -44,11 +44,11 @@
         </div>
         <div class="paste-btns">
           <button id="btn-paste" title="把座標設為我的位置">📍 設為我的位置</button>
-          <button id="btn-addstation" title="用座標新增一個標點/站台">➕ 新增站台</button>
+          <button id="btn-addstation" title="用座標新增一個標點/站臺">➕ 新增站臺</button>
         </div>
         <div class="data-btns">
-          <button id="btn-export" title="匯出站台資料 JSON">匯出</button>
-          <button id="btn-import" title="匯入站台資料 JSON">匯入</button>
+          <button id="btn-export" title="匯出站臺資料 JSON">匯出</button>
+          <button id="btn-import" title="匯入站臺資料 JSON">匯入</button>
           <button id="btn-reset" title="還原為預設資料">還原預設</button>
           <input id="file-import" type="file" accept=".json,.csv,.tsv,.gpx,application/json,text/csv" hidden />
         </div>
@@ -102,7 +102,7 @@
       <div class="los-box">
         <div class="los-title">路徑分析</div>
         <div id="aim-hint" class="aim-hint"></div>
-        <div id="los-status" class="los-status">選一個站台開始…</div>
+        <div id="los-status" class="los-status">選一個站臺開始…</div>
         <canvas id="profile" class="profile"></canvas>
         <div class="legend">
           <span><i class="lg lg-ground"></i>地形</span>
@@ -112,8 +112,8 @@
       </div>
 
       <div class="list-box">
-        <div class="list-title">站台 / 山峰（點選目標）
-          <button id="btn-analyze-all" class="mini" title="計算所有站台的路徑遮蔽與餘裕">分析全部</button>
+        <div class="list-title">站臺 / 山峰（點選目標）
+          <button id="btn-analyze-all" class="mini" title="計算所有站臺的路徑遮蔽與餘裕">分析全部</button>
         </div>
         <div id="analyze-progress" class="analyze-progress"></div>
         <ul id="target-list" class="target-list"></ul>
@@ -123,7 +123,7 @@
           <span><b class="b-bad">擋</b>被山擋住</span>
           <span>⭐最佳可通</span>
         </div>
-        <div class="tip">💡 在地圖上點空白處可新增站台；點站台可選取/編輯。移動位置請用「定位」「貼上座標」或編輯站台裡的「移動」（已關閉手動拖曳，避免誤拖）。</div>
+        <div class="tip">💡 在地圖上點空白處可新增站臺；點站臺可選取/編輯。移動位置請用「定位」「貼上座標」或編輯站臺裡的「移動」（已關閉手動拖曳，避免誤拖）。</div>
       </div>
     </aside>
   </main>
