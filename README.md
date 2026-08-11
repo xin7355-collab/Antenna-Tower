@@ -5,6 +5,9 @@
 同時算出 **直線距離、方位角、目標仰角**，並判斷 **中間有沒有山擋住**（視線／
 無線電路徑地形遮蔽分析）。
 
+- **線上使用** → https://xin7355-collab.github.io/Antenna-Tower/
+- **Android APK** → [Releases `apk` 標籤](https://github.com/xin7355-collab/Antenna-Tower/releases/tag/apk)（WebView 包裝，內容即線上版）
+
 ![概念](docs/concept.png)
 
 ## 功能 Features
@@ -89,7 +92,10 @@ EIRP、接收增益、靈敏度可在「進階：連結預算」中調整。
 
 ## 使用 Usage
 
-純靜態網頁，無需建置。用任一靜態伺服器開啟（相機/感測器需 HTTPS）：
+直接開 https://xin7355-collab.github.io/Antenna-Tower/ 即可使用，
+推送到 `main` 後會自動部署更新。
+
+本機執行：純靜態網頁，無需建置，用任一靜態伺服器開啟（相機/感測器需 HTTPS）：
 
 ```bash
 python3 -m http.server 8000
