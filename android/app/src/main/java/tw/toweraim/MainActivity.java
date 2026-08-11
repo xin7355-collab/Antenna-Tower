@@ -22,7 +22,7 @@ import android.widget.FrameLayout;
  */
 public class MainActivity extends Activity {
 
-  private static final String APP_URL = "https://8rknrz2dbw-ai.github.io/transcript-deck/";
+  private static final String APP_URL = "https://xin7355-collab.github.io/Antenna-Tower/";
   private static final int REQ_PERMS = 1001;
 
   private WebView web;
