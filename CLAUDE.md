@@ -29,6 +29,12 @@ node test/geo.test.js         # 執行單元測試（無相依）
 - 一律用 `UI.ask/confirm/alert/toast`，**不要用瀏覽器內建的
   `alert`/`confirm`/`prompt`** —— 本 App 會以「加入主畫面」的獨立模式執行，
   iOS 在該模式下對內建對話框的支援不可靠。
+- 關鍵按鈕（浮層、AR 控制列）用 `UI.bindTap` 綁定，**不要只設 `onclick`**：
+  iOS 獨立模式的「觸控→合成 click」不可靠，會變成按了沒反應。
+- 呼叫原生全螢幕後要**驗證真的進了全螢幕**（`toggleFullscreen` 的
+  setTimeout 檢查）：iPhone 的 API 可能存在、呼叫不報錯、但什麼都不發生。
+- 錯誤原因用會停留的 `UI.alert` 呈現，別用幾秒就消失的 toast ——
+  沒看到原因的失敗，感受上就是「壞掉了」。
 - AR 仰角上下限為 `PITCH_MIN/PITCH_MAX`（-60°～90°）。上限必須含天頂，
   星座常在 60° 以上，鎖太低會變成手機轉不過去。
 - 全螢幕要保留 `_setPseudoFull` 這條 CSS 後備路徑：iPhone Safari 沒有

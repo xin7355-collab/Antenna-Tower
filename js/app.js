@@ -253,6 +253,7 @@
       saveState();
       mapView.clearPath();
       render();
+      UI.toast(`已刪除「${t.name}」`, 'ok');
     };
   }
 
@@ -341,6 +342,7 @@
       saveState();
       mapView.clearPath();
       render();
+      UI.toast(`已刪除「${t.name}」`, 'ok');
     };
   }
 

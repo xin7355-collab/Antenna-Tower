@@ -27,6 +27,40 @@
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   /**
+   * 可靠的「點一下」綁定。
+   * iOS（尤其是加入主畫面的獨立模式）對「觸控 → 合成 click」的轉換不可靠，
+   * 動態插入的浮層按鈕常常按了沒反應。這裡直接聽 touchend 觸發動作
+   * （並 preventDefault 阻止合成 click 造成雙觸發），click 留給滑鼠/鍵盤。
+   * 手指有明顯位移（>12px，是在捲動）就不觸發。
+   */
+  function bindTap(el, fn, when) {
+    let sx = 0, sy = 0, movedFar = false, lastTouch = 0;
+    el.addEventListener('touchstart', (e) => {
+      const t = e.touches[0];
+      sx = t.clientX; sy = t.clientY; movedFar = false;
+    }, { passive: true });
+    el.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (Math.hypot(t.clientX - sx, t.clientY - sy) > 12) movedFar = true;
+    }, { passive: true });
+    el.addEventListener('touchend', (e) => {
+      if (movedFar) return;
+      // when 條件不成立就完全不介入（含不 preventDefault），
+      // 例如浮層背景綁定時，別攔掉冒泡上來的按鈕/輸入框事件。
+      if (when && !when(e)) return;
+      lastTouch = Date.now();
+      if (e.cancelable) e.preventDefault();
+      fn(e);
+    });
+    el.addEventListener('click', (e) => {
+      if (when && !when(e)) return;
+      // 若合成 click 仍到達（部分平台不理會 preventDefault），別重複觸發
+      if (Date.now() - lastTouch < 700) return;
+      fn(e);
+    });
+  }
+
+  /**
    * 顯示一個浮層。resolve 由 buttons 的 value 決定，點背景等同取消。
    * @param opts.title   標題
    * @param opts.body    說明文字（可省）
@@ -54,7 +88,10 @@
       h.appendChild(wrap);
 
       const input = wrap.querySelector('.ui-input');
+      let settled = false;   // touchend 與殘留的合成 click 都可能到達，只認第一次
       const done = (v) => {
+        if (settled) return;
+        settled = true;
         doc.removeEventListener('keydown', onKey, true);
         wrap.remove();
         resolve(v);
@@ -62,13 +99,14 @@
       const cancel = () => done(opts.cancelValue !== undefined ? opts.cancelValue : null);
 
       wrap.querySelectorAll('.ui-btn').forEach((b) => {
-        b.onclick = () => {
+        bindTap(b, () => {
           const spec = opts.buttons[Number(b.dataset.i)];
           done(spec.value !== undefined ? spec.value : (input ? input.value : true));
-        };
+        });
       });
-      // 點卡片外面 = 取消
-      wrap.addEventListener('click', (e) => { if (e.target === wrap) cancel(); });
+      // 點卡片外面 = 取消。條件限定目標是背景本身，
+      // 按鈕/輸入框冒泡上來的事件完全不介入。
+      bindTap(wrap, () => cancel(), (e) => e.target === wrap);
       const onKey = (e) => {
         if (e.key === 'Escape') { e.preventDefault(); cancel(); }
         else if (e.key === 'Enter' && input) {
@@ -120,5 +158,5 @@
     return el;
   }
 
-  global.UI = { modal, ask, confirm, alert, toast };
+  global.UI = { modal, ask, confirm, alert, toast, bindTap };
 })(typeof window !== 'undefined' ? window : globalThis);

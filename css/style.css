@@ -1,5 +1,6 @@
 /* style.css — 塔臺對準儀 */
 * { box-sizing: border-box; }
+button, select, .tab, .gf, .tgt, .ed-ico, .ui-btn, .arlbl { touch-action: manipulation; }
 html, body { margin: 0; height: 100%; font-family: system-ui, "PingFang TC", "Noto Sans TC", sans-serif; }
 body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf1; overflow: hidden; }
 
@@ -235,9 +236,11 @@ body.ar-full-active { overflow: hidden; }
 }
 
 /* ===== 對話框 / 提示（取代 alert / confirm / prompt） ===== */
-.ui-host { position: fixed; inset: 0; pointer-events: none; z-index: 20000; }
-.ui-modal { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  background: rgba(4,7,11,.62); pointer-events: auto; padding: 20px;
+/* 零尺寸容器：不用 pointer-events:none 覆蓋全畫面（iOS 對這種寫法的
+   命中測試偶有問題），浮層與提示各自以 fixed 定位。 */
+.ui-host { position: fixed; left: 0; top: 0; width: 0; height: 0; z-index: 20000; }
+.ui-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(4,7,11,.62); padding: 20px;
   padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
 .ui-card { width: 100%; max-width: 340px; background: #1a2029; border: 1px solid #2f3947;
   border-radius: 14px; padding: 16px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
@@ -250,7 +253,7 @@ body.ar-full-active { overflow: hidden; }
   border-radius: 8px; padding: 10px; font-size: 14px; cursor: pointer; }
 .ui-btn.primary { background: #2f6fff; border-color: #2f6fff; color: #fff; font-weight: 700; }
 .ui-btn.danger { background: #431a1a; border-color: #6b2626; color: #ff8080; font-weight: 700; }
-.ui-toast { position: absolute; left: 50%; transform: translateX(-50%);
+.ui-toast { position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(24px + env(safe-area-inset-bottom, 0px)); pointer-events: auto;
   max-width: min(88vw, 420px); background: rgba(16,22,30,.95); color: #e8ecf1;
   border: 1px solid #38424f; border-radius: 10px; padding: 10px 14px; font-size: 13px;

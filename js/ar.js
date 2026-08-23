@@ -133,15 +133,21 @@
         const t = e.changedTouches[0]; up(t.clientX, t.clientY);
       });
 
+      // 控制列按鈕用 touchend 直接觸發（UI.bindTap），不能只靠 click ——
+      // iOS 獨立模式的合成 click 不可靠，會變成「按了沒反應」。
+      const bindBtn = (el, fn) => {
+        if (global.UI && UI.bindTap) UI.bindTap(el, fn);
+        else el.onclick = fn;
+      };
       this.$sensorBtn = this.root.querySelector('[data-act="sensor"]');
-      this.$sensorBtn.onclick = () => {
+      bindBtn(this.$sensorBtn, () => {
         if (this.usingSensor) this.disableSensor(); else this.enableSensor();
         setTimeout(() => this._syncControlState(), 50);
-      };
+      });
       this.$camBtn = this.root.querySelector('[data-act="camera"]');
-      this.$camBtn.onclick = () => this.toggleCamera();
+      bindBtn(this.$camBtn, () => this.toggleCamera());
       this.$fullBtn = this.root.querySelector('[data-act="full"]');
-      this.$fullBtn.onclick = () => this.toggleFullscreen();
+      bindBtn(this.$fullBtn, () => this.toggleFullscreen());
       document.addEventListener('fullscreenchange', () => {
         this._syncControlState();
         setTimeout(() => this._paint(), 100);
@@ -207,14 +213,27 @@
       }
       if (el.classList.contains('ar-pseudo-full')) { this._setPseudoFull(false); return; }
 
+      // 獨立模式（加入主畫面）或明確不支援全螢幕的平台：直接走偽全螢幕。
+      // iPhone 上 fullscreenEnabled 為 false，即使 API「存在」也不會動作。
+      const standalone = navigator.standalone === true ||
+        (global.matchMedia && matchMedia('(display-mode: standalone)').matches);
       const req = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (!req) { this._setPseudoFull(true); return; }
+      if (!req || standalone ||
+          document.fullscreenEnabled === false || document.webkitFullscreenEnabled === false) {
+        this._setPseudoFull(true);
+        return;
+      }
+      let fell = false;
+      const fallback = () => { if (!fell) { fell = true; this._setPseudoFull(true); } };
       try {
         const r = req.call(el);
-        if (r && typeof r.catch === 'function') r.catch(() => this._setPseudoFull(true));
-      } catch (_) {
-        this._setPseudoFull(true);
-      }
+        if (r && typeof r.catch === 'function') r.catch(fallback);
+      } catch (_) { fallback(); return; }
+      // 有些平台的 API 存在、呼叫也不報錯，但就是什麼都不發生（iPhone 對非
+      // video 元素就是如此）。呼叫後驗證真的進了全螢幕，沒有就走偽全螢幕。
+      setTimeout(() => {
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) fallback();
+      }, 350);
     }
 
     _setPseudoFull(on) {
@@ -302,9 +321,15 @@
       if (this._camBusy) return;
       if (this.camOn) { this._stopCamera(); return; }
       this._camBusy = true;
+      const standalone = navigator.standalone === true ||
+        (global.matchMedia && matchMedia('(display-mode: standalone)').matches);
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('此瀏覽器不支援相機（請用 Safari/Chrome 並以 https 開啟）');
+          // 舊版 iOS 的「加入主畫面」獨立模式沒有 getUserMedia，
+          // 這不是本 App 能繞過的 —— 給準確的替代路徑而不是泛泛的錯誤。
+          throw new Error(standalone
+            ? '此 iOS 版本在「加入主畫面」模式下不提供相機。請改用 Safari 直接開啟本網頁（相機在 Safari 中可用），或更新 iOS 後再試。'
+            : '此瀏覽器不支援相機（請用 Safari/Chrome 並以 https 開啟）');
         }
         // 優先用後鏡頭；不支援時退回任一相機
         let stream;
@@ -329,13 +354,18 @@
       } catch (err) {
         this._stopCamera();   // 收乾淨，下次再按才不會以為已經開著
         const msg = (err && err.name === 'NotAllowedError')
-          ? '相機權限被拒。請在瀏覽器網址列的權限設定允許「相機」後再試。'
+          ? (standalone
+              ? '相機權限被拒。iOS 的獨立模式每次啟動都會重新詢問相機權限——請再按一次「相機」並在跳出的詢問選「允許」；若沒有跳出詢問，請到 設定 → 隱私權與安全性 → 相機 檢查。'
+              : '相機權限被拒。請在瀏覽器網址列的權限設定允許「相機」後再試。')
           : (err && (err.name === 'NotReadableError' || err.name === 'AbortError'))
             ? '相機被其它 App 佔用（或系統暫時鎖住）。請關掉其它使用相機的程式再試。'
             : (location.protocol !== 'https:'
                 ? '相機需要 HTTPS。請用 https 的網址開啟。'
                 : '無法開啟相機：' + (err && err.message ? err.message : err));
-        notify(msg, 'warn', 5000);
+        // 用會停留的浮層說明原因——3 秒就消失的提示常常沒被看到，
+        // 使用者只會留下「按了沒反應」的印象。
+        if (global.UI && UI.alert) UI.alert('無法開啟相機', msg);
+        else notify(msg, 'warn', 6000);
       } finally {
         this._camBusy = false;
       }
