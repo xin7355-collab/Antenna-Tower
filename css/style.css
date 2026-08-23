@@ -40,8 +40,10 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .editor:empty { display: none; }
 .ed-title { font-weight: 700; margin-bottom: 8px; }
 .ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; }
-.ed-grid label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; }
-.ed-grid input { background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; }
+/* min-width:0 + width:100%：格線項目預設 min-width:auto，input 會以預設字元寬
+   撐開欄位、把右欄推出面板外（面板只有 320px）。兩者缺一都還是會溢出。 */
+.ed-grid label { display: flex; flex-direction: column; gap: 3px; color: #9fb0c0; min-width: 0; }
+.ed-grid input, .ed-grid select { width: 100%; min-width: 0; background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 6px; }
 .ed-move { display: flex; gap: 6px; margin-top: 8px; }
 .ed-move input { flex: 1; min-width: 0; background: #12171e; color: #e8ecf1; border: 1px solid #333e4b; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
 .ed-move button { background: #2f6fff; color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
@@ -109,6 +111,10 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .mk-sat .mk-ico { font-size: 22px; }
 .mk-custom .mk-lbl { background: #a15c07; color: #fff; }   /* 自訂站臺：琥珀色 */
 .mk-custom.mk-sel .mk-lbl { background: #ff9f2e; color: #1a1200; }
+/* 群組色：標籤左側色條（--gc 由 map.js 依群組帶入） */
+.mk[style*="--gc"] .mk-lbl { border-left: 3px solid var(--gc); padding-left: 4px; }
+.mk-marker .mk-lbl { background: rgba(58,25,50,.82); color: #ffd9f4; }
+.mk-marker.mk-sel .mk-lbl { background: #ff6bd6; color: #2a0020; }
 
 /* ===== AR 視角 ===== */
 #view-ar { background: #0b0f14; cursor: grab; user-select: none; }
@@ -147,7 +153,20 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-sky-sat .arlbl-name { color: #7dffcf; }
 .arlbl-sky-planet .arlbl-name::before,
 .arlbl-sky-star .arlbl-name::before { content: '• '; opacity: .8; }
+.arlbl-marker .arlbl-name { color: #ffb3ea; }
+.arlbl-sky-con .arlbl-name { color: #9ad0ff; font-size: 11px; font-weight: 700; letter-spacing: .05em; opacity: .9; }
+/* 群組色點：站臺的通/繞/擋用名稱顏色，群組則靠這個小圓點區分 */
+.arlbl-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 4px; vertical-align: middle; box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.arlbl-sky-star .arlbl-dot, .arlbl-sky-con .arlbl-dot { display: none; }
+
 .ar-ecliptic { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+/* 山體輪廓：畫在天空/地面之上、羅盤與標籤之下 */
+.ar-skyline { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+/* 相機開啟時輪廓要半透明，才不會把實景蓋掉 */
+.ar-cam-on .ar-skyline { opacity: .45; }
+.ar-constel { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
+.ar-readout .ro-meta { font-size: 12px; color: #b9c6d3; }
 .mini2 { align-self: end; background: #222a35; color: #cdd6df; border: 1px solid #333e4b; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
 
 .ar-crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,.7); font-size: 26px; font-weight: 300; pointer-events: none; text-shadow: 0 1px 3px #000; }
@@ -182,6 +201,49 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
   .stage { grid-template-columns: 1fr; grid-template-rows: 55% 45%; }
   .panel { border-left: 0; border-top: 1px solid #2a313b; }
 }
+
+/* ===== 群組 ===== */
+.grp-box { background: #1a2029; border: 1px solid #2a313b; border-radius: 10px; padding: 10px; margin: 10px 0; }
+.grp-title { font-weight: 700; font-size: 12px; margin-bottom: 7px; }
+.group-filter { display: flex; flex-wrap: wrap; gap: 5px; }
+.gf { display: inline-flex; align-items: center; gap: 5px; background: #222a35; color: #cdd6df;
+  border: 1px solid #333e4b; border-radius: 999px; padding: 3px 9px; font-size: 11px; cursor: pointer; }
+.gf i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.gf b { color: #8a99a8; font-weight: 600; }
+.gf:hover { background: #2a323d; }
+.gf-off { opacity: .38; text-decoration: line-through; }
+.gf-empty { font-size: 11px; color: #6b7a89; }
+
+/* 清單的群組分隔列 */
+.tgt-group { display: flex; align-items: center; gap: 6px; list-style: none;
+  font-size: 11px; font-weight: 700; color: #9fb0c0; letter-spacing: .04em;
+  padding: 9px 8px 4px; border-bottom: 1px solid #232b36; margin-bottom: 2px; }
+.tgt-group i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.tgt-group b { margin-left: auto; color: #6b7a89; font-weight: 600; }
+
+/* 地圖點擊新增什麼 */
+.clickadds { margin-top: 7px; font-size: 11px; }
+.clickadds label { display: flex; align-items: center; gap: 6px; color: #9fb0c0; }
+.clickadds select { background: #12171e; color: #e8ecf1; border: 1px solid #333e4b;
+  border-radius: 6px; padding: 3px 6px; font-size: 11px; }
+.paste-btns #btn-addmarker { background: #4a2a44; color: #ffc8ef; border: 1px solid #7a4470; }
+
+/* ===== 山體輪廓 ===== */
+.skyline-box { background: #1a2029; border: 1px solid #2a313b; border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.skyline-title { font-weight: 700; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+.skyline-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.skyline-note { font-size: 10px; color: #6b7a89; line-height: 1.4; }
+.skyline-status { font-size: 11px; margin-top: 6px; min-height: 12px; }
+.skyline-status .ok { color: #35d07f; }
+.skyline-status .warn { color: #f5b942; }
+.skyline-title button[disabled] { opacity: .5; cursor: default; }
+
+/* 標註編輯器的圖示挑選 */
+.ed-icons { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.ed-ico { background: #12171e; border: 1px solid #333e4b; border-radius: 6px;
+  padding: 3px 6px; font-size: 15px; cursor: pointer; line-height: 1.2; }
+.ed-ico:hover { background: #222a35; }
+.ed-ico.on { border-color: #ff6bd6; background: #3a1f34; }
 
 /* 目標真實高度欄位 */
 .ed-grid .ed-wide { grid-column: 1 / -1; }

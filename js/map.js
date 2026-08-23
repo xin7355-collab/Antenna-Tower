@@ -11,14 +11,19 @@
   const Geo = global.Geo;
 
   const ICONS = {
-    me: '📍', station: '📡', peak: '⛰️',
+    me: '📍', station: '📡', peak: '⛰️', marker: '📌',
   };
 
   function divIcon(L, entity, selected) {
     const cls = `mk mk-${entity.type}${selected ? ' mk-sel' : ''}${entity.custom ? ' mk-custom' : ''}`;
+    // 自訂標註可自選圖示；其餘依 type 用固定圖示
+    const ico = (entity.type === 'marker' && entity.icon) ? entity.icon : (ICONS[entity.type] || '•');
+    // 群組色以標籤左側色條呈現（「我的位置」不分群組）
+    const gc = (global.Groups && entity.type !== 'me') ? Groups.colorOf(entity) : null;
+    const style = gc ? ` style="--gc:${gc}"` : '';
     return L.divIcon({
       className: 'mk-wrap',
-      html: `<div class="${cls}"><span class="mk-ico">${ICONS[entity.type] || '•'}</span>` +
+      html: `<div class="${cls}"${style}><span class="mk-ico">${ico}</span>` +
             `<span class="mk-lbl">${entity.name}</span></div>`,
       iconSize: null,
       iconAnchor: [0, 0],
@@ -48,7 +53,9 @@
 
     render(state) {
       const L = this.L;
-      const all = [state.me, ...state.stations, ...state.peaks];
+      const hidden = (state.settings && state.settings.hiddenGroups) || [];
+      const pins = [...state.stations, ...state.peaks, ...(state.markers || [])];
+      const all = [state.me, ...(global.Groups ? Groups.visible(pins, hidden) : pins)];
       const seen = new Set();
 
       all.forEach((ent) => {

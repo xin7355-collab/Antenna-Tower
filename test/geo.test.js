@@ -8,7 +8,8 @@ require('../js/geo.js');
 require('../js/elevation.js');
 require('../js/parse.js');
 require('../js/sky.js');
-const { Geo, Elevation, Parse, Sky } = globalThis;
+require('../js/groups.js');
+const { Geo, Elevation, Parse, Sky, Groups } = globalThis;
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -182,6 +183,142 @@ function runParseTests() {
   ok('衛星正上方 → 距離 ~420 km', approx(over.rangeKm, 420, 5));
   const north = Sky.lookAngles({ lat: 25, lng: 121, alt: 0 }, { lat: 28, lng: 121, altKm: 420 });
   ok('衛星偏北 → 方位 ~0°(北)', north.az < 3 || north.az > 357);
+
+  console.log('groups — 群組分類與配色');
+  {
+    ok('內建群組取得顏色', Groups.resolve('north').color === '#4da3ff');
+    ok('依 type 落到預設群組',
+      Groups.groupIdOf({ type: 'peak' }) === 'peak' && Groups.groupIdOf({ type: 'marker' }) === 'mark');
+    ok('明確 group 優先於 type', Groups.groupIdOf({ type: 'peak', group: 'north' }) === 'north');
+    // 沒看過的群組自動註冊，且同名永遠同色
+    const c1 = Groups.colorOf({ type: 'station', group: '花東線' });
+    const c2 = Groups.colorOf({ type: 'station', group: '花東線' });
+    ok('未知群組自動註冊且顏色穩定', c1 === c2 && /^#[0-9a-f]{6}$/i.test(c1));
+    ok('不同群組通常不同色', Groups.autoColor('甲線') !== Groups.autoColor('乙線'));
+
+    const ents = [
+      { id: 'a', type: 'station', group: 'north' },
+      { id: 'b', type: 'station', group: 'south' },
+      { id: 'c', type: 'peak' },
+      { id: 'd', type: 'station', group: 'north' },
+    ];
+    ok('isHidden 只認被藏的群組',
+      Groups.isHidden(ents[0], ['north']) && !Groups.isHidden(ents[1], ['north']));
+    ok('visible 過濾掉隱藏群組', Groups.visible(ents, ['north']).length === 2);
+    ok('visible 空隱藏清單 → 全數保留', Groups.visible(ents, []).length === 4);
+    const parts = Groups.partition(ents);
+    ok('partition 分成 3 組', parts.length === 3);
+    ok('partition 內建群組排序在前（北部先於南部）',
+      parts[0].group.id === 'north' && parts[1].group.id === 'south');
+    ok('partition 各組數量正確', parts[0].items.length === 2 && parts[2].items.length === 1);
+    ok('learn 後新群組出現在 all()',
+      Groups.learn([{ type: 'station', group: '南橫線' }]).some((g) => g.id === '南橫線'));
+  }
+
+  console.log('sky — 星座連線');
+  {
+    const dipper = Sky.CONSTELLATIONS.find((c) => c.id === 'bigdipper');
+    ok('有北斗七星', !!dipper);
+    const keys = new Set(dipper.lines.flat());
+    ok('北斗七星剛好 7 顆星', keys.size === 7);
+    ok('北斗七星含天樞與搖光', keys.has('dubhe') && keys.has('alkaid'));
+    // 每條連線的兩端都必須在星表裡，否則畫出來會斷線
+    const missing = [];
+    Sky.CONSTELLATIONS.forEach((c) => c.lines.flat().forEach((k) => {
+      if (!Sky.STAR_BY_KEY.has(k)) missing.push(c.id + ':' + k);
+    }));
+    ok('所有星座引用的星都存在於星表 (' + (missing.join(',') || '無缺漏') + ')', missing.length === 0);
+    ok('星表 key 不重複', new Set(Sky.STARS.map((s) => s.key)).size === Sky.STARS.length);
+
+    const date = new Date(Date.UTC(2026, 2, 15, 14, 0, 0)); // 台灣時間深夜
+    const cons = Sky.constellationLines(date, 25.03, 121.56);
+    ok('回傳若干星座', cons.length > 0);
+    ok('每組都有線段與星點', cons.every((c) => c.segments.length > 0 && c.stars.length > 0));
+    ok('線段端點 az/alt 在合理範圍', cons.every((c) => c.segments.every((s) =>
+      s.a.az >= 0 && s.a.az <= 360 && s.a.alt >= -90 && s.a.alt <= 90 &&
+      s.b.az >= 0 && s.b.az <= 360 && s.b.alt >= -90 && s.b.alt <= 90)));
+    ok('label 方位在 0..360', cons.every((c) => c.label.az >= 0 && c.label.az <= 360));
+    ok('only 選項可只取單一星座',
+      Sky.constellationLines(date, 25.03, 121.56, { only: ['orion'], minAlt: -90 }).length === 1);
+
+    // 天權 3.31 等：星等上限 2.2 時本來看不到，開星座連線才會補進來
+    const plain = Sky.skyObjects(date, 25.03, 121.56, { maxMag: 2.2 });
+    const withCon = Sky.skyObjects(date, 25.03, 121.56, { maxMag: 2.2, constellations: true });
+    ok('一般模式不含天權(3.31等)', !plain.some((o) => o.starKey === 'megrez'));
+    ok('開星座連線時補上天權，避免斗杓缺角', withCon.some((o) => o.starKey === 'megrez'));
+    ok('開星座連線不影響亮星', withCon.some((o) => o.starKey === 'vega'));
+
+    // 方位向量平均：0° 與 360° 附近的星不該平均成 180°
+    const c = Sky.centroid([{ az: 350, alt: 10 }, { az: 10, alt: 20 }]);
+    ok('centroid 跨 0° 接縫正確 (~0°)', c.az < 3 || c.az > 357);
+    ok('centroid 仰角取平均', approx(c.alt, 15, 0.001));
+  }
+
+  console.log('elevation — 天際線（山體輪廓）');
+  {
+    // 單一射線：近處高山應勝過遠處矮丘
+    const rays = [
+      { az: 0, pts: [{ dist: 1000, ground: 600 }, { dist: 20000, ground: 900 }] },
+      { az: 90, pts: [{ dist: 5000, ground: 100 }] },
+      { az: 180, pts: [{ dist: 5000, ground: null }] },   // 沒有高程資料
+    ];
+    const sl = Elevation.skylineFromRays(rays, 100);
+    ok('每個方位各一筆', sl.length === 3);
+    ok('依方位排序', sl[0].az === 0 && sl[1].az === 90 && sl[2].az === 180);
+    ok('近山(1km/600m)勝過遠丘(20km/900m)', sl[0].dist === 1000);
+    ok('稜線仰角 ~26.6°', approx(sl[0].elev, 26.57, 0.2));
+    ok('與觀測者同高的遠處地面 → 仰角為負（地球曲率）', sl[1].elev < 0);
+    ok('無高程資料的方位 elev 為 null', sl[2].elev === null);
+
+    // 曲率修正：同樣高度的地面，越遠仰角越低
+    const flat = [{ az: 0, pts: [{ dist: 5000, ground: 500 }] }, { az: 1, pts: [{ dist: 50000, ground: 500 }] }];
+    const f = Elevation.skylineFromRays(flat, 0);
+    ok('同高地面：遠者仰角較低', f[1].elev < f[0].elev);
+
+    // 山頭偵測：兩個明顯突起
+    const ring = [];
+    for (let i = 0; i < 36; i++) {
+      const e = 5 + 10 * Math.exp(-((i - 6) ** 2) / 4) + 6 * Math.exp(-((i - 24) ** 2) / 4);
+      ring.push({ az: i * 10, elev: e, dist: 10000, ground: 1000 });
+    }
+    const peaks = Elevation.skylinePeaks(ring);
+    ok('找出 2 座山頭', peaks.length === 2);
+    ok('最突出者排第一且突起度最大',
+      peaks[0].prominence >= peaks[1].prominence && approx(peaks[0].az, 60, 1));
+    ok('平坦天際線沒有山頭',
+      Elevation.skylinePeaks(ring.map((p) => ({ ...p, elev: 5 }))).length === 0);
+    ok('點數不足時回傳空陣列', Elevation.skylinePeaks([{ az: 0, elev: 1 }]).length === 0);
+  }
+
+  console.log('parse — 標註與群組欄位');
+  {
+    const csv = 'name,lat,lng,alt,type,群組,icon,備註\n' +
+      '甲台,23.4,120.9,3000,station,南橫線,,主力中繼\n' +
+      '停車場,23.5,120.8,2300,標註,登山,🚗,可停十輛\n';
+    const r = Parse.parseStations(csv, 'x.csv');
+    ok('CSV 站臺與標註分流', r.stations.length === 1 && r.markers.length === 1);
+    ok('CSV 站臺帶入群組', r.stations[0].group === '南橫線');
+    ok('CSV 站臺帶入備註', r.stations[0].note === '主力中繼');
+    ok('CSV 標註型別/圖示/備註正確',
+      r.markers[0].type === 'marker' && r.markers[0].icon === '🚗' && r.markers[0].note === '可停十輛');
+    ok('CSV 標註帶入群組', r.markers[0].group === '登山');
+
+    const noType = Parse.parseStations('name,lat,lng\nA,23,121\n', 'x.csv');
+    ok('沒有 type 欄時全部視為站臺', noType.stations.length === 1 && noType.markers.length === 0);
+
+    const json = JSON.stringify({
+      stations: [{ id: 's1', type: 'station', name: 'S', lat: 23, lng: 121, alt: 0 }],
+      markers: [{ id: 'm1', type: 'marker', name: 'M', lat: 23.1, lng: 121.1, alt: 0, icon: '⭐' }],
+      groups: [{ id: 'g1', name: '自訂線', color: '#123456' }],
+    });
+    const rj = Parse.parseStations(json, 'x.json');
+    ok('JSON 一併還原標註', rj.markers.length === 1 && rj.markers[0].icon === '⭐');
+    ok('JSON 一併還原群組定義', rj.groups[0].color === '#123456');
+    ok('JSON 無 markers 欄位時為空陣列',
+      Parse.parseStations('{"stations":[]}', 'x.json').markers.length === 0);
+    ok('GPX 回傳空標註陣列',
+      Parse.parseStations('<gpx><wpt lat="24" lon="121"/></gpx>', 'x.gpx').markers.length === 0);
+  }
 
   console.log(`\n結果：${pass} 通過，${fail} 失敗`);
   process.exit(fail ? 1 : 0);

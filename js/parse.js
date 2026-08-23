@@ -13,10 +13,11 @@
     return `${prefix}-${i}-${Math.round(lat * 1e4)}`;
   }
 
-  // CSV / TSV：首列為欄名，欄名支援中英對照
+  // CSV / TSV：首列為欄名，欄名支援中英對照。
+  // 回傳 { stations, markers }：type 欄寫「標註/marker」的列會歸到 markers。
   function parseCSV(text) {
     const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    if (!lines.length) return [];
+    if (!lines.length) return { stations: [], markers: [] };
     const delim = lines[0].includes('\t') ? '\t' : ',';
     const header = lines[0].split(delim).map((h) => h.trim().toLowerCase());
     const col = (names) => header.findIndex((h) => names.includes(h));
@@ -27,27 +28,53 @@
     const iAnt = col(['antenna', 'ant', '天線']);
     const iFreq = col(['freq', 'frequency', '頻率', 'mhz']);
     const iTrue = col(['truealt', 'true_alt', 'realalt', '真實高度', '目標真實高度']);
+    const iGroup = col(['group', 'grp', 'category', '群組', '分類']);
+    const iType = col(['type', 'kind', '類型', '種類']);
+    const iIcon = col(['icon', 'emoji', '圖示']);
+    const iNote = col(['note', 'remark', 'desc', '備註', '說明']);
     if (iLat < 0 || iLng < 0) throw new Error('CSV 需有經緯度欄位（lat/lng 或 緯度/經度）');
 
-    const out = [];
+    const cell = (c, i) => (i >= 0 && c[i] != null ? String(c[i]).trim() : '');
+    // 類型欄位：出現「標註/marker/mark/註記」視為自訂標註，其餘一律當站臺
+    const isMarkerRow = (v) => /^(marker|mark|note|標註|註記|標記)$/i.test(v);
+
+    const stations = [], markers = [];
     for (let i = 1; i < lines.length; i++) {
       const c = lines[i].split(delim);
       const lat = parseFloat(c[iLat]);
       const lng = parseFloat(c[iLng]);
       if (!isFinite(lat) || !isFinite(lng)) continue;
-      out.push({
+      const group = cell(c, iGroup);
+      const note = cell(c, iNote);
+      const alt = iAlt >= 0 ? (parseFloat(c[iAlt]) || 0) : 0;
+
+      if (isMarkerRow(cell(c, iType))) {
+        markers.push({
+          id: stationId('mk-csv', i, lat),
+          type: 'marker',
+          name: cell(c, iName) || `匯入標註${i}`,
+          lat, lng, alt,
+          icon: cell(c, iIcon) || '📌',
+          note,
+          custom: true,
+          ...(group ? { group } : { group: 'mark' }),
+        });
+        continue;
+      }
+      stations.push({
         id: stationId('st-csv', i, lat),
         type: 'station',
-        name: iName >= 0 && c[iName] ? c[iName].trim() : `匯入站臺${i}`,
-        lat, lng,
-        alt: iAlt >= 0 ? (parseFloat(c[iAlt]) || 0) : 0,
+        name: cell(c, iName) || `匯入站臺${i}`,
+        lat, lng, alt,
         antenna: iAnt >= 0 ? (parseFloat(c[iAnt]) || 6) : 6,
         freqMHz: iFreq >= 0 ? (parseFloat(c[iFreq]) || undefined) : undefined,
+        ...(note ? { note } : {}),
+        ...(group ? { group } : {}),
         ...(iTrue >= 0 && c[iTrue] != null && String(c[iTrue]).trim() !== '' && isFinite(parseFloat(c[iTrue]))
           ? { trueAlt: parseFloat(c[iTrue]) } : {}),
       });
     }
-    return out;
+    return { stations, markers };
   }
 
   // GPX 航點：<wpt lat lon>[<ele><name>]</wpt> 及自封閉 <wpt .../>
@@ -149,18 +176,30 @@
     return { lat, lng };
   }
 
+  /**
+   * 依副檔名/內容判斷格式並解析。
+   * @returns { stations, markers, me?, settings?, groups?, mode:'replace'|'append' }
+   */
   function parseStations(text, filename = '') {
     const t = text.trim();
     const fn = filename.toLowerCase();
     if (fn.endsWith('.json') || t[0] === '{' || t[0] === '[') {
       const d = JSON.parse(t);
-      if (Array.isArray(d)) return { stations: d, mode: 'replace' };
-      return { me: d.me, stations: d.stations || [], settings: d.settings, mode: 'replace' };
+      if (Array.isArray(d)) return { stations: d, markers: [], mode: 'replace' };
+      return {
+        me: d.me,
+        stations: d.stations || [],
+        markers: d.markers || [],
+        groups: d.groups || null,
+        settings: d.settings,
+        mode: 'replace',
+      };
     }
     if (fn.endsWith('.gpx') || t.includes('<gpx') || t.includes('<wpt')) {
-      return { stations: parseGPX(t), mode: 'append' };
+      return { stations: parseGPX(t), markers: [], mode: 'append' };
     }
-    return { stations: parseCSV(t), mode: 'append' };
+    const csv = parseCSV(t);
+    return { stations: csv.stations, markers: csv.markers, mode: 'append' };
   }
 
   global.Parse = { parseStations, parseCSV, parseGPX, parseLatLng, parseCoordComponent };

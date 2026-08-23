@@ -17,6 +17,18 @@
   const HFOV = 70;   // 水平視野角 (deg)
   const VFOV = 100;  // 垂直視野角 (deg)
 
+  /**
+   * 稜線顏色：依距離由近到遠，暖褐 → 藍灰。
+   * 這是空氣透視（遠處偏藍偏淡）的簡化版，用來分辨前後山稜。
+   */
+  function ridgeColor(distM) {
+    const near = [0xb8, 0x8a, 0x5c];   // 近：暖褐
+    const far = [0x8f, 0xb4, 0xd8];    // 遠：淡藍
+    const t = Math.max(0, Math.min(1, ((distM || 0) / 1000 - 15) / 65)); // 15km→80km
+    const c = near.map((n, i) => Math.round(n + (far[i] - n) * t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+
   class ARView {
     constructor(rootId, handlers = {}) {
       this.h = handlers;
@@ -34,8 +46,10 @@
         <div class="ar-sky"></div>
         <div class="ar-ground"></div>
         <div class="ar-horizon"></div>
+        <svg class="ar-skyline" preserveAspectRatio="none"></svg>
         <div class="ar-compass"></div>
         <svg class="ar-ecliptic" preserveAspectRatio="none"></svg>
+        <svg class="ar-constel" preserveAspectRatio="none"></svg>
         <div class="ar-labels"></div>
         <svg class="ar-aim" preserveAspectRatio="none"></svg>
         <div class="ar-crosshair">+</div>
@@ -51,6 +65,8 @@
       this.$labels = this.root.querySelector('.ar-labels');
       this.$compass = this.root.querySelector('.ar-compass');
       this.$ecliptic = this.root.querySelector('.ar-ecliptic');
+      this.$skyline = this.root.querySelector('.ar-skyline');
+      this.$constel = this.root.querySelector('.ar-constel');
       this.$aim = this.root.querySelector('.ar-aim');
       this.$readout = this.root.querySelector('.ar-readout');
       this.$aimhud = this.root.querySelector('.ar-aimhud');
@@ -221,8 +237,18 @@
       let aim = null;
       const cand = [];
 
-      // 1a) 陸地目標（山/站臺）
-      [...st.stations, ...st.peaks].forEach((t) => {
+      // 0) 山體輪廓（天際線）：先畫，之後標籤的引線會落在稜線上而不是地平線
+      this._paintSkyline(st.skyline, angDiff, projX, projY, W, H, horizonY);
+      // 標籤引線的落點：有輪廓就用稜線高度，沒有就退回地平線
+      const groundYAt = (az) => {
+        const e = this._skylineElevAt(st.skyline, az);
+        return e == null ? horizonY : Math.min(H, projY(e));
+      };
+
+      // 1a) 陸地目標（山 / 站臺 / 自訂標註）；被隱藏的群組不畫
+      const land = [...st.stations, ...st.peaks, ...(st.markers || [])];
+      const hidden = (st.settings && st.settings.hiddenGroups) || [];
+      (global.Groups ? Groups.visible(land, hidden) : land).forEach((t) => {
         const brg = Geo.bearing(me, t);
         if (Math.abs(angDiff(brg)) > HFOV / 2 + 4) return;
         const dist = Geo.distance(me, t);
@@ -232,13 +258,21 @@
         const a = st.analysisById[t.id];
         const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
         const blocked = a && !a.losClear;
+        const isMarker = t.type === 'marker';
+        const gcolor = global.Groups ? Groups.colorOf(t) : '#9fb0c0';
+        const y = projY(elev);
         cand.push({
-          id: t.id, name: t.name, kind: t.type, selected, status, stick: true, custom: !!t.custom,
-          x: projX(brg), y: projY(elev),
-          sub: `${Math.round(tgtTop)} m · ${Geo.fmtDistance(dist)}`,
-          prio: (selected ? 1e9 : 0) + (t.type === 'station' ? 1e6 : 0) + tgtTop - dist / 1000,
+          id: t.id, name: (isMarker && t.icon ? t.icon + ' ' : '') + t.name,
+          kind: t.type, selected, status, stick: true, custom: !!t.custom,
+          x: projX(brg), y, stickTo: groundYAt(brg), gcolor,
+          sub: isMarker
+            ? `${Geo.fmtDistance(dist)}${t.note ? ' · ' + t.note : ''}`
+            : `${Math.round(tgtTop)} m · ${Geo.fmtDistance(dist)}`,
+          prio: (selected ? 1e9 : 0)
+            + (t.type === 'station' ? 1e6 : isMarker ? 5e5 : 0)
+            + tgtTop - dist / 1000,
           readout: () => this._geoReadout(t, dist, brg, elev, blocked),
-          color: blocked ? '#e23b3b' : '#2f6fff',
+          color: blocked ? '#e23b3b' : gcolor,
         });
       });
 
@@ -246,7 +280,29 @@
       if (st.settings.showSky && global.Sky) {
         const date = st.settings.skyTime ? new Date(st.settings.skyTime) : new Date();
         this._paintEcliptic(Sky.eclipticPath(date, me.lat, me.lng, 5), angDiff, projX, projY, W, H);
-        const objs = Sky.skyObjects(date, me.lat, me.lng, { maxMag: st.settings.starMag != null ? st.settings.starMag : 2.2 });
+        // 星座連線（北斗七星、獵戶座…）＋ 星座名稱標籤
+        if (st.settings.showConstellations) {
+          const cons = Sky.constellationLines(date, me.lat, me.lng);
+          this._paintConstellations(cons, angDiff, projX, projY, W, H);
+          cons.forEach((c) => {
+            if (c.label.alt < 0 || Math.abs(angDiff(c.label.az)) > HFOV / 2) return;
+            cand.push({
+              id: 'con-' + c.id, name: c.name, kind: 'sky-con', selected: false, stick: false,
+              x: projX(c.label.az), y: projY(c.label.alt),
+              // 排在所有恆星之上（亮星最高約 1.03e5）：星座名是整組的抬頭，
+              // 被其中一顆星的名字擠掉的話就白畫了。行星(2e5)仍優先於它。
+              sub: '星座', prio: 1.5e5,
+              readout: () => `<div class="ro-name">${c.name}</div><div class="ro-line">星座 / 星群連線</div>`,
+              color: '#9ad0ff',
+            });
+          });
+        } else {
+          this.$constel.innerHTML = '';
+        }
+        const objs = Sky.skyObjects(date, me.lat, me.lng, {
+          maxMag: st.settings.starMag != null ? st.settings.starMag : 2.2,
+          constellations: !!st.settings.showConstellations,
+        });
         objs.forEach((o) => {
           if (o.alt < -2) return;                        // 地平線下不畫
           if (Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
@@ -263,6 +319,7 @@
         });
       } else {
         this.$ecliptic.innerHTML = '';
+        this.$constel.innerHTML = '';
       }
 
       // 1c) 衛星（如 ISS）— 獨立於天空開關
@@ -291,9 +348,15 @@
       // 3) 依 x 由左到右輸出
       const html = placed.slice().sort((a, b) => a.x - b.x).map((c) => {
         const cls = `arlbl arlbl-${c.kind}${c.selected ? ' arlbl-sel' : ''}${c.status ? ' arlbl-' + c.status : ''}${c.custom ? ' arlbl-custom' : ''}`;
-        const stick = c.stick ? `<i class="arlbl-stick" style="height:${Math.max(8, horizonY - c.y)}px"></i>` : '';
+        // 引線拉到該方位的稜線上（沒有輪廓資料時退回地平線）
+        const foot = c.stickTo != null ? c.stickTo : horizonY;
+        const stick = c.stick
+          ? `<i class="arlbl-stick" style="height:${Math.max(8, foot - c.y)}px;background:${c.gcolor || 'rgba(255,255,255,.55)'}"></i>`
+          : '';
+        // 群組色點：站臺的「通/繞/擋」用名稱顏色表示，群組則用這個色點區分
+        const dot = c.gcolor ? `<i class="arlbl-dot" style="background:${c.gcolor}"></i>` : '';
         return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.id}">` +
-          `<span class="arlbl-name">${c.name}</span><span class="arlbl-sub">${c.sub}</span>${stick}</div>`;
+          `<span class="arlbl-name">${dot}${c.name}</span><span class="arlbl-sub">${c.sub}</span>${stick}</div>`;
       });
 
       this.$labels.innerHTML = html.join('');
@@ -305,7 +368,7 @@
       this._paintAim(aim, W, H);
 
       // 對準 HUD：手機當天線仰角/方位對準器
-      const selTgt = [...st.stations, ...st.peaks].find((t) => t.id === st.selectedId);
+      const selTgt = [...st.stations, ...st.peaks, ...(st.markers || [])].find((t) => t.id === st.selectedId);
       this._paintAimHud(selTgt, me, st);
     }
 
@@ -370,9 +433,13 @@
       const altTxt = Geo.usesTrueAlt(t)
         ? `真實高度：${Math.round(top).toLocaleString()} m`
         : `海拔：${Math.round(top).toLocaleString()} m`;
-      return `<div class="ro-name">${t.name}</div>` +
+      const grp = global.Groups ? Groups.nameOf(t) : '';
+      const meta = (grp ? `<div class="ro-line ro-meta">群組：${grp}` +
+        (t.type === 'marker' && t.note ? `　${t.note}` : '') + '</div>' : '');
+      return `<div class="ro-name">${(t.type === 'marker' && t.icon ? t.icon + ' ' : '')}${t.name}</div>` +
         `<div class="ro-line">${altTxt}　距離：${Geo.fmtDistance(dist)}</div>` +
-        `<div class="ro-line">方位：${Math.round(brg)}° ${Geo.compass8(brg)}　仰角：${elev.toFixed(1)}°</div>` + los;
+        `<div class="ro-line">方位：${Math.round(brg)}° ${Geo.compass8(brg)}　仰角：${elev.toFixed(1)}°</div>` +
+        los + meta;
     }
 
     _skyReadout(o) {
@@ -383,6 +450,98 @@
       return `<div class="ro-name">${o.name}</div>` +
         `<div class="ro-line">方位：${Math.round(o.az)}° ${Geo.compass8(o.az)}　仰角：${o.alt.toFixed(1)}°</div>` +
         `<div class="ro-line">天體：${typeName}${extra}</div>`;
+    }
+
+    /**
+     * 山體輪廓：沿著天際線（每個方位的稜線仰角）畫出山形，並填滿下方山體。
+     * 稜線本身依「該稜線離我多遠」上色 —— 近的暖、遠的冷 —— 所以一眼看得出
+     * 哪一道稜線在前、哪一道在後。
+     */
+    _paintSkyline(skyline, angDiff, projX, projY, W, H, horizonY) {
+      const pts = skyline && skyline.points;
+      if (!pts || !pts.length) { this.$skyline.innerHTML = ''; return; }
+
+      // 取視野內（含邊緣緩衝）的點，依畫面 x 由左到右排好
+      const vis = pts
+        .filter((p) => p.elev != null && Math.abs(angDiff(p.az)) <= HFOV / 2 + 6)
+        .map((p) => ({ ...p, x: projX(p.az), y: projY(p.elev) }))
+        .sort((a, b) => a.x - b.x);
+      if (vis.length < 2) { this.$skyline.innerHTML = ''; return; }
+
+      // 山體：稜線 → 往下包到畫面底部，形成填滿的山塊
+      let d = `M ${vis[0].x.toFixed(1)} ${vis[0].y.toFixed(1)} `;
+      for (let i = 1; i < vis.length; i++) d += `L ${vis[i].x.toFixed(1)} ${vis[i].y.toFixed(1)} `;
+      d += `L ${vis[vis.length - 1].x.toFixed(1)} ${H} L ${vis[0].x.toFixed(1)} ${H} Z`;
+
+      // 稜線分段上色：依距離插值（近 20km 暖色 → 遠 80km 冷色）
+      const seg = [];
+      for (let i = 1; i < vis.length; i++) {
+        const a = vis[i - 1], b = vis[i];
+        const dist = ((a.dist || 0) + (b.dist || 0)) / 2;
+        seg.push(`<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}" ` +
+          `x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}" ` +
+          `stroke="${ridgeColor(dist)}" stroke-width="2.5" stroke-linecap="round"/>`);
+      }
+
+      this.$skyline.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      this.$skyline.innerHTML =
+        `<defs><linearGradient id="sl-fill" x1="0" y1="0" x2="0" y2="1">` +
+        `<stop offset="0%" stop-color="#2b3546" stop-opacity="0.92"/>` +
+        `<stop offset="100%" stop-color="#141a24" stop-opacity="0.98"/>` +
+        `</linearGradient></defs>` +
+        `<path d="${d}" fill="url(#sl-fill)"/>` + seg.join('');
+    }
+
+    /** 內插出某個方位的天際線仰角；沒有資料回傳 null。 */
+    _skylineElevAt(skyline, az) {
+      const pts = skyline && skyline.points;
+      if (!pts || !pts.length) return null;
+      const a = ((az % 360) + 360) % 360;
+      // points 依 az 排序且環繞一圈，找出夾住 a 的兩點做線性內插
+      let lo = null, hi = null;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        if (p.elev == null) continue;
+        if (p.az <= a && (!lo || p.az > lo.az)) lo = p;
+        if (p.az >= a && (!hi || p.az < hi.az)) hi = p;
+      }
+      // 跨 0°/360° 接縫：用另一端補
+      if (!lo) lo = pts.filter((p) => p.elev != null).slice(-1)[0];
+      if (!hi) hi = pts.find((p) => p.elev != null);
+      if (!lo || !hi) return null;
+      if (lo === hi) return lo.elev;
+      let span = hi.az - lo.az;
+      if (span <= 0) span += 360;
+      let off = a - lo.az;
+      if (off < 0) off += 360;
+      const f = span === 0 ? 0 : off / span;
+      return lo.elev + (hi.elev - lo.elev) * f;
+    }
+
+    /** 星座連線：把每組星座的線段畫出來，並在星點上加圈標示 */
+    _paintConstellations(cons, angDiff, projX, projY, W, H) {
+      if (!cons || !cons.length) { this.$constel.innerHTML = ''; return; }
+      const parts = [];
+      cons.forEach((c) => {
+        const dash = c.dashed ? ' stroke-dasharray="5 5"' : '';
+        const stroke = c.dashed ? '#7fa8d8' : '#9ad0ff';
+        c.segments.forEach((s) => {
+          // 兩端都要在視野內且在地平線上，才畫這一段
+          if (s.a.alt < -1 || s.b.alt < -1) return;
+          if (Math.abs(angDiff(s.a.az)) > HFOV / 2 + 10 && Math.abs(angDiff(s.b.az)) > HFOV / 2 + 10) return;
+          parts.push(`<line x1="${projX(s.a.az).toFixed(1)}" y1="${projY(s.a.alt).toFixed(1)}" ` +
+            `x2="${projX(s.b.az).toFixed(1)}" y2="${projY(s.b.alt).toFixed(1)}" ` +
+            `stroke="${stroke}" stroke-width="1.6" opacity="0.75"${dash}/>`);
+        });
+        c.stars.forEach((s) => {
+          if (s.alt < -1 || Math.abs(angDiff(s.az)) > HFOV / 2 + 4) return;
+          const r = Math.max(1.8, 4.2 - (s.mag || 2) * 0.7);
+          parts.push(`<circle cx="${projX(s.az).toFixed(1)}" cy="${projY(s.alt).toFixed(1)}" ` +
+            `r="${r.toFixed(1)}" fill="#eaf4ff" opacity="0.95"/>`);
+        });
+      });
+      this.$constel.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      this.$constel.innerHTML = parts.join('');
     }
 
     // 畫黃道線（在視野內的連續段）

@@ -15,9 +15,11 @@
     me: { ...S.me },
     stations: S.stations.map((s) => ({ ...s })),
     peaks: S.peaks.map((p) => ({ ...p })),
+    markers: (S.markers || []).map((m) => ({ ...m })),   // 自訂位置標註
     selectedId: null,
     satellites: [],            // 即時衛星（ISS）方位仰角
     analysisById: {},          // id -> analyzePath 結果（快取）
+    skyline: null,             // 天際線輪廓 { at, obsAlt, points }
     settings: {
       freqMHz: 145.7, obsAntenna: 3, tgtAntenna: 6, k: Geo.K_DEFAULT, withCurvature: true,
       eirpDbm: 37,      // 等效全向輻射功率（約 5 W）
@@ -27,14 +29,26 @@
       skyTime: null,    // null=現在；否則 ISO 字串
       starMag: 2.2,     // 顯示星等上限
       showSat: false,   // 衛星（ISS）
+      showConstellations: true, // 星座連線（北斗七星等）
+      hiddenGroups: [], // 被隱藏的群組 id
     },
   };
 
   let mapView, arView;
   const LS_KEY = 'vrmap.state.v1';
 
+  /** 所有可選取的地面實體（不含「我的位置」） */
+  function allTargets() {
+    return [...state.stations, ...state.peaks, ...state.markers];
+  }
+
   function findEntity(id) {
-    return [state.me, ...state.stations, ...state.peaks].find((e) => e.id === id) || null;
+    return [state.me, ...allTargets()].find((e) => e.id === id) || null;
+  }
+
+  /** 讓 groups.js 認得資料裡出現的所有群組（含匯入進來的新群組） */
+  function learnGroups() {
+    if (global.Groups) Groups.learn(allTargets());
   }
 
   // 設定我的位置：立即更新畫面，高程與遮蔽在背景補上（不卡 UI）
@@ -42,6 +56,9 @@
     state.me.lat = lat;
     state.me.lng = lng;
     state.analysisById = {};
+    state.skyline = null;   // 換位置了，舊的山體輪廓不再適用
+    const slEl = document.getElementById('skyline-status');
+    if (slEl) slEl.textContent = '';
     saveState();
     if (mapView.focus) mapView.focus(state.me);
     render();                               // 立刻反應
@@ -54,7 +71,7 @@
   function saveState() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
-        me: state.me, stations: state.stations, settings: state.settings,
+        me: state.me, stations: state.stations, markers: state.markers, settings: state.settings,
       }));
     } catch (_) { /* localStorage 可能被停用，忽略 */ }
   }
@@ -65,22 +82,47 @@
       const d = JSON.parse(raw);
       if (d.me) Object.assign(state.me, d.me);
       if (Array.isArray(d.stations)) state.stations = d.stations;
+      if (Array.isArray(d.markers)) state.markers = d.markers;
       if (d.settings) Object.assign(state.settings, d.settings);
     } catch (_) { /* 資料毀損則忽略 */ }
   }
 
   function render() {
+    learnGroups();
     mapView.render(state);
     arView.render(state);
     renderPanel();
     renderEditor();
+    renderGroupFilter();
     updateCoverage();
   }
 
   // ---- 站臺編輯器 --------------------------------------------------------
+  /** 群組下拉選單的 <option>；最後一項可即時建立新群組 */
+  function groupOptionsHtml(selectedId) {
+    const gs = global.Groups ? Groups.all() : [];
+    return gs.map((g) =>
+      `<option value="${g.id}"${g.id === selectedId ? ' selected' : ''}>${g.name}</option>`
+    ).join('') + '<option value="__new__">＋ 新增群組…</option>';
+  }
+
+  /** 群組欄位變更：選到「新增群組」就問名稱並即時註冊 */
+  function applyGroupChange(t, sel) {
+    if (sel.value === '__new__') {
+      const name = prompt('新群組名稱：', '');
+      if (!name) { sel.value = Groups.groupIdOf(t) || ''; return false; }
+      Groups.register(name, name);
+      t.group = name;
+    } else {
+      t.group = sel.value;
+    }
+    return true;
+  }
+
   function renderEditor() {
     const el = document.getElementById('editor');
     const t = findEntity(state.selectedId);
+    if (t && t.type === 'marker') return renderMarkerEditor(el, t);
     if (!t || t.type !== 'station') { el.innerHTML = ''; el.dataset.eid = ''; return; }
 
     // 同一站臺且編輯器已存在：就地更新欄位值，且「不碰使用者正在編輯的欄位」，
@@ -112,6 +154,7 @@
       `<label>頻率(MHz)<input data-f="freqMHz" type="number" step="0.001" value="${t.freqMHz || ''}"></label>` +
       `<label>緯度<input data-f="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
       `<label>經度<input data-f="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
+      `<label class="ed-wide">群組<select id="ed-group">${groupOptionsHtml(Groups.groupIdOf(t))}</select></label>` +
       `<label class="ed-wide">目標真實高度(m)　<small>填了就以此為準（覆蓋 海拔+天線）；留空則用 海拔+天線</small>` +
       `<input data-f="trueAlt" type="number" step="1" placeholder="留空＝不使用" value="${t.trueAlt != null && t.trueAlt !== '' ? t.trueAlt : ''}"></label>` +
       `</div>` +
@@ -157,6 +200,11 @@
         if (t.type !== 'me') select(t.id);
       };
     });
+    const grpSel = document.getElementById('ed-group');
+    if (grpSel) grpSel.onchange = () => {
+      if (!applyGroupChange(t, grpSel)) return;
+      saveState(); render(); select(t.id);
+    };
     // 貼座標把此站臺移過去
     const moveBtn = document.getElementById('ed-movebtn');
     const moveInp = document.getElementById('ed-movecoord');
@@ -188,6 +236,135 @@
       mapView.clearPath();
       render();
     };
+  }
+
+  // ---- 自訂位置標註編輯器 ------------------------------------------------
+  // 常用圖示；也可自行輸入任意 emoji。
+  const MARKER_ICONS = ['📌', '🚩', '⭐', '🏠', '⛺', '🚗', '🅿️', '🥾', '💧', '⚠️', '📷', '🎯'];
+
+  function renderMarkerEditor(el, t) {
+    // 同一標註且已渲染：就地更新，別把正在輸入的欄位沖掉
+    if (el.dataset.eid === t.id && el.querySelector('[data-mf]')) {
+      el.querySelectorAll('[data-mf]').forEach((inp) => {
+        if (inp === document.activeElement) return;
+        const f = inp.dataset.mf;
+        const val = (f === 'lat' || f === 'lng') ? Number(t[f]).toFixed(5) : (t[f] != null ? t[f] : '');
+        if (String(inp.value) !== String(val)) inp.value = val;
+      });
+      // 目前選用的圖示也要跟著換高亮，否則按了圖示卻看不出哪個被選中
+      el.querySelectorAll('.ed-ico').forEach((b) => {
+        b.classList.toggle('on', b.dataset.ico === (t.icon || '📌'));
+      });
+      return;
+    }
+    el.dataset.eid = t.id;
+    el.innerHTML =
+      `<div class="ed-title">📌 編輯標註</div>` +
+      `<div class="ed-grid">` +
+      `<label>名稱<input data-mf="name" type="text" value="${String(t.name).replace(/"/g, '&quot;')}"></label>` +
+      `<label>圖示<input data-mf="icon" type="text" maxlength="4" value="${t.icon || '📌'}"></label>` +
+      `<label>緯度<input data-mf="lat" type="number" step="0.0001" value="${t.lat.toFixed(5)}"></label>` +
+      `<label>經度<input data-mf="lng" type="number" step="0.0001" value="${t.lng.toFixed(5)}"></label>` +
+      `<label class="ed-wide">群組<select id="ed-mgroup">${groupOptionsHtml(Groups.groupIdOf(t))}</select></label>` +
+      `<label class="ed-wide">備註<input data-mf="note" type="text" placeholder="例如：空曠、南向無遮蔽" value="${String(t.note || '').replace(/"/g, '&quot;')}"></label>` +
+      `</div>` +
+      `<div class="ed-icons">${MARKER_ICONS.map((i) =>
+        `<button class="ed-ico${i === (t.icon || '📌') ? ' on' : ''}" data-ico="${i}">${i}</button>`).join('')}</div>` +
+      `<div class="ed-eff">海拔 ${Math.round(t.alt || 0)} m　·　距我 ${Geo.fmtDistance(Geo.distance(state.me, t))}</div>` +
+      `<div class="ed-move">` +
+      `<input id="ed-mmovecoord" type="text" placeholder="貼座標把此標註移過去" />` +
+      `<button id="ed-mmovebtn">移動</button></div>` +
+      `<div class="ed-btns">` +
+      `<button id="ed-mdel" class="danger">刪除此標註</button></div>`;
+
+    el.querySelectorAll('[data-mf]').forEach((inp) => {
+      inp.onchange = () => {
+        const f = inp.dataset.mf;
+        if (f === 'lat' || f === 'lng') {
+          const raw = inp.value.trim();
+          const v = /[°'"nsewNSEW]/.test(raw) ? Parse.parseCoordComponent(raw) : parseFloat(raw);
+          const limit = f === 'lat' ? 90 : 180;
+          if (v != null && isFinite(v) && Math.abs(v) <= limit) t[f] = v;
+        } else {
+          t[f] = inp.value;
+        }
+        state.analysisById = {};
+        saveState(); render(); select(t.id);
+      };
+    });
+    el.querySelectorAll('.ed-ico').forEach((b) => {
+      b.onclick = () => { t.icon = b.dataset.ico; saveState(); render(); select(t.id); };
+    });
+    const mg = document.getElementById('ed-mgroup');
+    if (mg) mg.onchange = () => {
+      if (!applyGroupChange(t, mg)) return;
+      saveState(); render(); select(t.id);
+    };
+    const mInp = document.getElementById('ed-mmovecoord');
+    const doMove = () => {
+      const ll = Parse.parseLatLng(mInp.value);
+      if (!ll) { alert('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）'); return; }
+      t.lat = ll.lat; t.lng = ll.lng; t.alt = 0;
+      state.analysisById = {};
+      mInp.value = '';
+      saveState(); render(); select(t.id);
+      if (mapView.focus) mapView.focus(t);
+      Elevation.elevationAt(t).then((e) => {
+        if (e != null) { t.alt = Math.round(e); saveState(); render(); }
+      }).catch(() => {});
+    };
+    document.getElementById('ed-mmovebtn').onclick = doMove;
+    mInp.onkeydown = (e) => { if (e.key === 'Enter') doMove(); };
+    document.getElementById('ed-mdel').onclick = () => {
+      if (!confirm(`確定刪除標註「${t.name}」？`)) return;
+      state.markers = state.markers.filter((m) => m.id !== t.id);
+      delete state.analysisById[t.id];
+      state.selectedId = null;
+      saveState();
+      mapView.clearPath();
+      render();
+    };
+  }
+
+  // ---- 群組過濾器 --------------------------------------------------------
+  function renderGroupFilter() {
+    const el = document.getElementById('group-filter');
+    if (!el || !global.Groups) return;
+    const counts = new Map();
+    allTargets().forEach((t) => {
+      const id = Groups.groupIdOf(t);
+      counts.set(id, (counts.get(id) || 0) + 1);
+    });
+    const hidden = state.settings.hiddenGroups || [];
+    const rows = Groups.all()
+      .filter((g) => counts.has(g.id))
+      .map((g) => {
+        const off = hidden.indexOf(g.id) >= 0;
+        return `<button class="gf${off ? ' gf-off' : ''}" data-g="${g.id}" ` +
+          `title="${off ? '點一下顯示' : '點一下隱藏'}「${g.name}」">` +
+          `<i style="background:${g.color}"></i>${g.name}<b>${counts.get(g.id)}</b></button>`;
+      });
+    el.innerHTML = rows.join('') ||
+      '<span class="gf-empty">尚無資料</span>';
+    el.querySelectorAll('.gf').forEach((b) => {
+      b.onclick = () => toggleGroup(b.dataset.g);
+    });
+  }
+
+  function toggleGroup(id) {
+    const h = state.settings.hiddenGroups || (state.settings.hiddenGroups = []);
+    const i = h.indexOf(id);
+    if (i >= 0) h.splice(i, 1); else h.push(id);
+    // 選取中的目標若被藏起來，一併取消選取，免得面板還停在看不見的東西上
+    const sel = findEntity(state.selectedId);
+    if (sel && Groups.isHidden(sel, h)) {
+      state.selectedId = null;
+      mapView.clearPath();
+      const info = document.getElementById('los-status');
+      if (info) info.textContent = '選一個站臺開始…';
+    }
+    saveState();
+    render();
   }
 
   // 依無線電視距畫各站臺涵蓋圈（假設對方天線高 RX_H 公尺）
@@ -335,6 +512,42 @@
     computingVs = false;
   }
 
+  // ---- 山體輪廓（天際線） ------------------------------------------------
+  // 沿著我的位置四周取地形，算出每個方位的稜線仰角，AR 就能把山形畫出來。
+  let computingSky = false;
+  async function computeSkyline() {
+    if (computingSky) return;
+    computingSky = true;
+    const btn = document.getElementById('btn-skyline');
+    const el = document.getElementById('skyline-status');
+    if (btn) btn.disabled = true;
+    try {
+      const sl = await Elevation.computeSkyline(state.me, {
+        eyeHeight: state.me.antenna || 2,
+        onProgress: (done, total) => {
+          if (el) el.textContent = `⏳ 取地形中… ${Math.round((done / total) * 100)}%`;
+        },
+      });
+      state.skyline = sl;
+      const peaks = Elevation.skylinePeaks(sl.points);
+      if (el) el.innerHTML = `<span class="ok">✓ 已畫出山體輪廓（${sl.points.length} 個方位、` +
+        `找到 ${peaks.length} 座山頭）</span>`;
+      showARTab();
+      arView.render(state);
+    } catch (err) {
+      if (el) el.innerHTML = `<span class="warn">⚠️ 計算失敗：${err.message}（需連線 open-meteo.com）</span>`;
+    }
+    if (btn) btn.disabled = false;
+    computingSky = false;
+  }
+
+  function clearSkyline() {
+    state.skyline = null;
+    const el = document.getElementById('skyline-status');
+    if (el) el.textContent = '';
+    arView.render(state);
+  }
+
   // ---- 一鍵分析全部站臺 --------------------------------------------------
   let analyzing = false;
   async function analyzeAll() {
@@ -367,19 +580,25 @@
   // ---- 資訊面板 ----------------------------------------------------------
   function renderPanel() {
     const listEl = document.getElementById('target-list');
-    // 站臺依路徑品質排序（已分析者），山峰依距離
-    const stations = [...state.stations].sort((a, b) => rankScore(b) - rankScore(a));
-    const peaks = [...state.peaks].sort((a, b) => Geo.distance(state.me, a) - Geo.distance(state.me, b));
-    const targets = [...stations, ...peaks];
+    const hidden = state.settings.hiddenGroups || [];
+    const visible = global.Groups ? Groups.visible(allTargets(), hidden) : allTargets();
 
     // 找出最佳可通站臺（可通且餘裕最大）
     let best = null, bestM = -Infinity;
-    stations.forEach((t) => {
+    state.stations.forEach((t) => {
       const a = state.analysisById[t.id];
       if (a && a.losClear) { const m = linkMargin(a); if (m > bestM) { bestM = m; best = t.id; } }
     });
 
-    listEl.innerHTML = targets.map((t) => {
+    // 群組內：站臺依路徑品質排序（已分析者），山峰/標註依距離
+    const sortInGroup = (a, b) => {
+      if (a.type === 'station' && b.type === 'station') return rankScore(b) - rankScore(a);
+      if (a.type === 'station') return -1;
+      if (b.type === 'station') return 1;
+      return Geo.distance(state.me, a) - Geo.distance(state.me, b);
+    };
+
+    const rowHtml = (t) => {
       const dist = Geo.distance(state.me, t);
       const brg = Geo.bearing(state.me, t);
       const a = state.analysisById[t.id];
@@ -388,15 +607,28 @@
       const m = a ? linkMargin(a) : null;
       const marginTxt = m != null ? ` · 餘裕 ${m >= 0 ? '+' : ''}${m.toFixed(0)}dB` : '';
       const sel = t.id === state.selectedId ? ' sel' : '';
-      const ico = t.type === 'station' ? '📡' : '⛰️';
+      const ico = t.type === 'station' ? '📡' : t.type === 'marker' ? (t.icon || '📌') : '⛰️';
       const customCls = t.custom ? ' tgt-custom' : '';
       const customBadge = t.custom ? '<b class="b-custom">自訂</b>' : '';
+      const sub = t.type === 'marker'
+        ? `${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)}${t.note ? ' · ' + t.note : ''}`
+        : `${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ` +
+          `${Math.round(Geo.targetTopAlt(t, state.settings.tgtAntenna))}m${Geo.usesTrueAlt(t) ? '✎' : ''}${marginTxt}`;
       return `<li class="tgt${sel}${customCls}" data-id="${t.id}">` +
         `<span class="t-ico">${ico}</span>` +
         `<span class="t-main"><b>${t.name}</b> ${badge}${star}${customBadge}` +
-        `<small>${Geo.fmtDistance(dist)} · ${Math.round(brg)}° ${Geo.compass8(brg)} · ${Math.round(Geo.targetTopAlt(t, state.settings.tgtAntenna))}m${Geo.usesTrueAlt(t) ? '✎' : ''}${marginTxt}</small></span>` +
-        `</li>`;
-    }).join('');
+        `<small>${sub}</small></span></li>`;
+    };
+
+    if (!global.Groups) {
+      listEl.innerHTML = visible.slice().sort(sortInGroup).map(rowHtml).join('');
+    } else {
+      listEl.innerHTML = Groups.partition(visible).map(({ group, items }) =>
+        `<li class="tgt-group"><i style="background:${group.color}"></i>${group.name}` +
+        `<b>${items.length}</b></li>` +
+        items.slice().sort(sortInGroup).map(rowHtml).join('')
+      ).join('');
+    }
     listEl.querySelectorAll('.tgt').forEach((el) => {
       el.onclick = () => select(el.dataset.id);
     });
@@ -465,6 +697,8 @@
     chk('opt-cov', !!state.settings.showCoverage);
     chk('opt-sky', !!state.settings.showSky);
     chk('opt-sat', !!state.settings.showSat);
+    chk('opt-constel', !!state.settings.showConstellations);
+    set('opt-clickadds', state.settings.mapClickAdds || 'station');
     skyTicker();
     satTicker();
   }
@@ -538,11 +772,33 @@
       saveState(); render();
     };
     document.getElementById('opt-starmag').onchange = (e) => { state.settings.starMag = parseFloat(e.target.value); saveState(); render(); };
+    document.getElementById('opt-constel').onchange = (e) => {
+      state.settings.showConstellations = e.target.checked;
+      saveState();
+      if (e.target.checked && !state.settings.showSky) {
+        // 星座畫在天文層上，天空沒開就看不到 —— 直接幫他開起來
+        state.settings.showSky = true;
+        const sky = document.getElementById('opt-sky');
+        if (sky) sky.checked = true;
+        skyTicker();
+        showARTab();
+        faceBestSky();
+      }
+      render();
+    };
+
+    // 山體輪廓
+    document.getElementById('btn-skyline').onclick = () => computeSkyline();
+    document.getElementById('btn-skyline-clear').onclick = () => clearSkyline();
     document.getElementById('opt-sat').onchange = (e) => {
       state.settings.showSat = e.target.checked;
       saveState(); satTicker(); render();
       if (e.target.checked) { showARTab(); setSkyHint('🛰 取得 ISS 位置中…（若在地平線下會顯示於地面方向）'); }
       else setSkyHint('');
+    };
+    document.getElementById('opt-clickadds').onchange = (e) => {
+      state.settings.mapClickAdds = e.target.value;
+      saveState();
     };
     document.getElementById('opt-freq').onchange = (e) => {
       state.settings.freqMHz = parseFloat(e.target.value) || 145.7;
@@ -560,7 +816,10 @@
 
     // 匯出 / 匯入 / 還原
     document.getElementById('btn-export').onclick = () => {
-      const data = JSON.stringify({ me: state.me, stations: state.stations, settings: state.settings }, null, 2);
+      const data = JSON.stringify({
+        me: state.me, stations: state.stations, markers: state.markers,
+        groups: global.Groups ? Groups.all() : undefined, settings: state.settings,
+      }, null, 2);
       const blob = new Blob([data], { type: 'application/json' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -577,22 +836,33 @@
       reader.onload = () => {
         try {
           const d = Parse.parseStations(reader.result, file.name);
-          if (!d.stations || !d.stations.length) throw new Error('找不到可匯入的站臺');
+          const nMk = (d.markers || []).length;
+          if ((!d.stations || !d.stations.length) && !nMk) throw new Error('找不到可匯入的站臺或標註');
+          // 檔案自帶群組定義（顏色/名稱）先註冊，資料才會用對顏色
+          if (global.Groups && Array.isArray(d.groups)) {
+            d.groups.forEach((g) => g && g.id && Groups.register(g.id, g.name, g.color));
+          }
           if (d.mode === 'replace') {
             if (d.me) Object.assign(state.me, d.me);
-            state.stations = d.stations;
+            state.stations = d.stations || [];
+            state.markers = d.markers || [];
             if (d.settings) Object.assign(state.settings, d.settings);
           } else {
-            state.stations = state.stations.concat(d.stations); // CSV/GPX 追加
+            state.stations = state.stations.concat(d.stations || []); // CSV/GPX 追加
+            if (nMk) state.markers = state.markers.concat(d.markers);
           }
           state.analysisById = {};
           state.selectedId = null;
+          state.skyline = null;
+          learnGroups();
           saveState();
           syncControls();
           mapView.clearPath();
           render();
           if (mapView.focus) mapView.focus(state.me);
-          alert(`已匯入 ${d.stations.length} 個站臺（${d.mode === 'replace' ? '取代' : '追加'}）`);
+          alert(`已匯入 ${(d.stations || []).length} 個站臺` +
+            (nMk ? `、${nMk} 個標註` : '') +
+            `（${d.mode === 'replace' ? '取代' : '追加'}）`);
         } catch (err) { alert('匯入失敗：' + err.message); }
       };
       reader.readAsText(file);
@@ -604,8 +874,11 @@
       state.me = { ...S.me };
       state.stations = S.stations.map((s) => ({ ...s }));
       state.peaks = S.peaks.map((p) => ({ ...p }));
+      state.markers = (S.markers || []).map((m) => ({ ...m }));
       state.analysisById = {};
       state.selectedId = null;
+      state.skyline = null;
+      state.settings.hiddenGroups = [];
       syncControls();
       mapView.clearPath();
       render();
@@ -641,6 +914,15 @@
       Elevation.elevationAt(st).then((e) => {
         if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
       }).catch(() => {});
+    };
+
+    // 用座標新增一個自訂標註（純標記，不是通聯對象）
+    document.getElementById('btn-addmarker').onclick = () => {
+      const inp = document.getElementById('paste-coord');
+      const ll = Parse.parseLatLng(inp.value);
+      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增標註」'); return; }
+      addMarker(ll.lat, ll.lng);
+      inp.value = '';
     };
 
     document.getElementById('btn-locate').onclick = () => {
@@ -689,6 +971,26 @@
     setSkyHint(`👉 ${pick.name}：往 方位 ${Math.round(pick.az)}° ${Geo.compass8(pick.az)}、仰角 ${Math.round(pick.alt)}° 看（共 ${up.length} 個天體在地平線上）`);
   }
 
+  /** 新增一個自訂位置標註；高程在背景補上 */
+  function addMarker(lat, lng, presetName) {
+    const name = presetName != null ? presetName
+      : prompt('標註名稱：', `標註 ${state.markers.length + 1}`);
+    if (name == null) return null;
+    const mk = {
+      id: `mk-${Date.now()}`, type: 'marker', group: 'mark', icon: '📌',
+      name: name || '新標註', lat, lng, alt: 0, note: '', custom: true,
+    };
+    state.markers.push(mk);
+    saveState();
+    render();
+    select(mk.id);
+    if (mapView.focus) mapView.focus(mk);
+    Elevation.elevationAt(mk).then((e) => {
+      if (e != null) { mk.alt = Math.round(e); saveState(); render(); }
+    }).catch(() => {});
+    return mk;
+  }
+
   // ---- 地圖回呼 ----------------------------------------------------------
   const handlers = {
     onSelect: (id) => select(id),
@@ -706,6 +1008,8 @@
       }).catch(() => {});
     },
     onAddStation: (lat, lng) => {
+      // 點地圖要新增什麼，由面板的「地圖點擊新增」決定
+      if (state.settings.mapClickAdds === 'marker') { addMarker(lat, lng); return; }
       const name = prompt('新增無線電站臺名稱：', `站臺 ${state.stations.length + 1}`);
       if (name == null) return;
       const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };

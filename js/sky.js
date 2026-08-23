@@ -129,30 +129,132 @@
     return { ra: norm360(atan2(yeq, xeq)), dec: atan2(zeq, Math.sqrt(xeq * xeq + yeq * yeq)) };
   }
 
-  // 亮星表（J2000，RA/Dec 度，視星等）
+  /*
+   * 亮星表（J2000，RA/Dec 度，視星等）
+   * key 供星座連線引用；星等超過顯示上限的星，若被星座用到仍會畫出來，
+   * 否則北斗七星會因為天權(3.31等)較暗而缺一角。
+   */
   const STARS = [
-    ['天狼星 Sirius', 101.287, -16.716, -1.46], ['老人星 Canopus', 95.988, -52.696, -0.74],
-    ['大角 Arcturus', 213.915, 19.182, -0.05], ['織女星 Vega', 279.234, 38.784, 0.03],
-    ['五車二 Capella', 79.172, 45.998, 0.08], ['參宿七 Rigel', 78.634, -8.202, 0.13],
-    ['南河三 Procyon', 114.825, 5.225, 0.34], ['參宿四 Betelgeuse', 88.793, 7.407, 0.5],
-    ['水委一 Achernar', 24.429, -57.237, 0.46], ['牛郎星 Altair', 297.696, 8.868, 0.77],
-    ['畢宿五 Aldebaran', 68.980, 16.509, 0.85], ['心宿二 Antares', 247.352, -26.432, 1.09],
-    ['角宿一 Spica', 201.298, -11.161, 1.04], ['北河三 Pollux', 116.329, 28.026, 1.14],
-    ['北落師門 Fomalhaut', 344.413, -29.622, 1.16], ['天津四 Deneb', 310.358, 45.280, 1.25],
-    ['軒轅十四 Regulus', 152.093, 11.967, 1.35], ['北河二 Castor', 113.650, 31.888, 1.58],
-    ['北極星 Polaris', 37.954, 89.264, 1.98], ['參宿五 Bellatrix', 81.283, 6.350, 1.64],
-    ['參宿一 Alnitak', 85.190, -1.943, 1.74], ['參宿二 Alnilam', 84.053, -1.202, 1.69],
-    ['參宿三 Mintaka', 83.002, -0.299, 2.23], ['天樞 Dubhe', 165.932, 61.751, 1.79],
-    ['搖光 Alkaid', 206.885, 49.313, 1.86], ['玉衡 Alioth', 193.507, 55.960, 1.76],
-    ['開陽 Mizar', 200.981, 54.925, 2.04], ['王良四 Schedar', 10.127, 56.537, 2.24],
-    ['婁宿三 Hamal', 31.793, 23.462, 2.00], ['室宿一 Markab', 346.190, 15.205, 2.49],
+    { key: 'sirius', name: '天狼星 Sirius', ra: 101.287, dec: -16.716, mag: -1.46 },
+    { key: 'canopus', name: '老人星 Canopus', ra: 95.988, dec: -52.696, mag: -0.74 },
+    { key: 'arcturus', name: '大角 Arcturus', ra: 213.915, dec: 19.182, mag: -0.05 },
+    { key: 'vega', name: '織女星 Vega', ra: 279.234, dec: 38.784, mag: 0.03 },
+    { key: 'capella', name: '五車二 Capella', ra: 79.172, dec: 45.998, mag: 0.08 },
+    { key: 'rigel', name: '參宿七 Rigel', ra: 78.634, dec: -8.202, mag: 0.13 },
+    { key: 'procyon', name: '南河三 Procyon', ra: 114.825, dec: 5.225, mag: 0.34 },
+    { key: 'betelgeuse', name: '參宿四 Betelgeuse', ra: 88.793, dec: 7.407, mag: 0.50 },
+    { key: 'achernar', name: '水委一 Achernar', ra: 24.429, dec: -57.237, mag: 0.46 },
+    { key: 'altair', name: '牛郎星 Altair', ra: 297.696, dec: 8.868, mag: 0.77 },
+    { key: 'aldebaran', name: '畢宿五 Aldebaran', ra: 68.980, dec: 16.509, mag: 0.85 },
+    { key: 'antares', name: '心宿二 Antares', ra: 247.352, dec: -26.432, mag: 1.09 },
+    { key: 'spica', name: '角宿一 Spica', ra: 201.298, dec: -11.161, mag: 1.04 },
+    { key: 'pollux', name: '北河三 Pollux', ra: 116.329, dec: 28.026, mag: 1.14 },
+    { key: 'fomalhaut', name: '北落師門 Fomalhaut', ra: 344.413, dec: -29.622, mag: 1.16 },
+    { key: 'deneb', name: '天津四 Deneb', ra: 310.358, dec: 45.280, mag: 1.25 },
+    { key: 'regulus', name: '軒轅十四 Regulus', ra: 152.093, dec: 11.967, mag: 1.35 },
+    { key: 'castor', name: '北河二 Castor', ra: 113.650, dec: 31.888, mag: 1.58 },
+    { key: 'polaris', name: '北極星 Polaris', ra: 37.954, dec: 89.264, mag: 1.98 },
+    { key: 'hamal', name: '婁宿三 Hamal', ra: 31.793, dec: 23.462, mag: 2.00 },
+    { key: 'markab', name: '室宿一 Markab', ra: 346.190, dec: 15.205, mag: 2.49 },
+    // 北斗七星（大熊座斗杓）
+    { key: 'dubhe', name: '天樞 Dubhe', ra: 165.932, dec: 61.751, mag: 1.79 },
+    { key: 'merak', name: '天璇 Merak', ra: 165.460, dec: 56.382, mag: 2.37 },
+    { key: 'phecda', name: '天璣 Phecda', ra: 178.458, dec: 53.695, mag: 2.44 },
+    { key: 'megrez', name: '天權 Megrez', ra: 183.857, dec: 57.033, mag: 3.31 },
+    { key: 'alioth', name: '玉衡 Alioth', ra: 193.507, dec: 55.960, mag: 1.76 },
+    { key: 'mizar', name: '開陽 Mizar', ra: 200.981, dec: 54.925, mag: 2.04 },
+    { key: 'alkaid', name: '搖光 Alkaid', ra: 206.885, dec: 49.313, mag: 1.86 },
+    // 獵戶座
+    { key: 'bellatrix', name: '參宿五 Bellatrix', ra: 81.283, dec: 6.350, mag: 1.64 },
+    { key: 'alnitak', name: '參宿一 Alnitak', ra: 85.190, dec: -1.943, mag: 1.74 },
+    { key: 'alnilam', name: '參宿二 Alnilam', ra: 84.053, dec: -1.202, mag: 1.69 },
+    { key: 'mintaka', name: '參宿三 Mintaka', ra: 83.002, dec: -0.299, mag: 2.23 },
+    { key: 'saiph', name: '參宿六 Saiph', ra: 86.939, dec: -9.670, mag: 2.06 },
+    // 仙后座（W 形）
+    { key: 'schedar', name: '王良四 Schedar', ra: 10.127, dec: 56.537, mag: 2.24 },
+    { key: 'caph', name: '王良一 Caph', ra: 2.294, dec: 59.150, mag: 2.27 },
+    { key: 'gammacas', name: '策 γ Cas', ra: 14.177, dec: 60.717, mag: 2.47 },
+    { key: 'ruchbah', name: '閣道三 Ruchbah', ra: 21.454, dec: 60.235, mag: 2.68 },
+    { key: 'segin', name: '閣道二 Segin', ra: 28.599, dec: 63.670, mag: 3.38 },
+    // 南十字座
+    { key: 'acrux', name: '十字架二 Acrux', ra: 186.650, dec: -63.099, mag: 0.77 },
+    { key: 'mimosa', name: '十字架三 Mimosa', ra: 191.930, dec: -59.689, mag: 1.25 },
+    { key: 'gacrux', name: '十字架一 Gacrux', ra: 187.791, dec: -57.113, mag: 1.63 },
+    { key: 'imai', name: '十字架四 Imai', ra: 183.786, dec: -58.749, mag: 2.79 },
+    // 天蠍座
+    { key: 'graffias', name: '房宿四 Graffias', ra: 241.359, dec: -19.805, mag: 2.62 },
+    { key: 'dschubba', name: '房宿三 Dschubba', ra: 240.083, dec: -22.622, mag: 2.29 },
+    { key: 'pisco', name: '房宿一 π Sco', ra: 239.713, dec: -26.114, mag: 2.89 },
+    { key: 'tausco', name: '心宿三 τ Sco', ra: 248.971, dec: -28.216, mag: 2.82 },
+    { key: 'epssco', name: '尾宿二 ε Sco', ra: 252.541, dec: -34.293, mag: 2.29 },
+    { key: 'musco', name: '尾宿一 μ¹ Sco', ra: 253.084, dec: -38.047, mag: 3.00 },
+    { key: 'zetasco', name: '尾宿三 ζ Sco', ra: 253.646, dec: -42.362, mag: 3.62 },
+    { key: 'etasco', name: '尾宿四 η Sco', ra: 258.038, dec: -43.239, mag: 3.33 },
+    { key: 'thetasco', name: '尾宿五 θ Sco', ra: 264.330, dec: -42.998, mag: 1.86 },
+    { key: 'kappasco', name: '尾宿七 κ Sco', ra: 265.622, dec: -39.030, mag: 2.41 },
+    { key: 'shaula', name: '尾宿八 Shaula', ra: 263.402, dec: -37.104, mag: 1.63 },
   ];
+
+  const STAR_BY_KEY = new Map(STARS.map((s) => [s.key, s]));
+
+  /*
+   * 星座 / 星群連線。lines 為成對的星 key，畫成折線。
+   * dashed=true 者為「想像出來的輔助線」（大三角、指極線），以虛線區別，
+   * 免得跟真正的星座連線混淆。
+   */
+  const CONSTELLATIONS = [
+    {
+      id: 'bigdipper', name: '北斗七星',
+      lines: [['alkaid', 'mizar'], ['mizar', 'alioth'], ['alioth', 'megrez'],
+        ['megrez', 'phecda'], ['phecda', 'merak'], ['merak', 'dubhe'], ['dubhe', 'megrez']],
+    },
+    {
+      id: 'pointer', name: '指極線→北極星', dashed: true,
+      lines: [['merak', 'dubhe'], ['dubhe', 'polaris']],
+    },
+    {
+      id: 'orion', name: '獵戶座',
+      lines: [['betelgeuse', 'bellatrix'], ['bellatrix', 'mintaka'], ['mintaka', 'alnilam'],
+        ['alnilam', 'alnitak'], ['betelgeuse', 'alnitak'], ['alnitak', 'saiph'],
+        ['mintaka', 'rigel'], ['rigel', 'saiph']],
+    },
+    {
+      id: 'cassiopeia', name: '仙后座',
+      lines: [['caph', 'schedar'], ['schedar', 'gammacas'], ['gammacas', 'ruchbah'], ['ruchbah', 'segin']],
+    },
+    {
+      id: 'scorpius', name: '天蠍座',
+      lines: [['graffias', 'dschubba'], ['dschubba', 'pisco'], ['dschubba', 'antares'],
+        ['antares', 'tausco'], ['tausco', 'epssco'], ['epssco', 'musco'], ['musco', 'zetasco'],
+        ['zetasco', 'etasco'], ['etasco', 'thetasco'], ['thetasco', 'kappasco'], ['kappasco', 'shaula']],
+    },
+    {
+      id: 'crux', name: '南十字座',
+      lines: [['acrux', 'gacrux'], ['mimosa', 'imai']],
+    },
+    {
+      id: 'summer', name: '夏季大三角', dashed: true,
+      lines: [['vega', 'deneb'], ['deneb', 'altair'], ['altair', 'vega']],
+    },
+    {
+      id: 'winter', name: '冬季大三角', dashed: true,
+      lines: [['betelgeuse', 'sirius'], ['sirius', 'procyon'], ['procyon', 'betelgeuse']],
+    },
+  ];
+
+  // 被任一星座用到的星 key（這些星即使較暗也要畫，否則連線會斷點）
+  const CONSTELLATION_KEYS = new Set(
+    CONSTELLATIONS.flatMap((c) => c.lines.flat())
+  );
 
   /**
    * 回傳所有天體的地平座標。
    * @param date JS Date（UTC 內部處理）
    * @param lat,lng 觀測者經緯度
-   * @param opts.stars 是否含亮星（預設 true）
+   * @param opts.stars         是否含亮星（預設 true）
+   * @param opts.maxMag        顯示星等上限（預設 2.5）
+   * @param opts.constellations 是否畫星座連線；true 時星座用到的星
+   *                            即使暗於 maxMag 也一併回傳，避免連線斷點
    */
   function skyObjects(date, lat, lng, opts = {}) {
     const jd = julianDate(date);
@@ -166,9 +268,64 @@
     for (const name in PLANETS) { const p = planetEqu(name, jd); add('pl-' + name, name, 'planet', p.ra, p.dec); }
     if (opts.stars !== false) {
       const maxMag = opts.maxMag != null ? opts.maxMag : 2.5;
-      STARS.forEach((st, i) => { if (st[3] <= maxMag) add('star-' + i, st[0], 'star', st[1], st[2], { mag: st[3] }); });
+      const wantCon = !!opts.constellations;
+      STARS.forEach((st) => {
+        if (st.mag > maxMag && !(wantCon && CONSTELLATION_KEYS.has(st.key))) return;
+        add('star-' + st.key, st.name, 'star', st.ra, st.dec, { mag: st.mag, starKey: st.key });
+      });
     }
     return out;
+  }
+
+  /**
+   * 星座 / 星群連線的地平座標。
+   *
+   * 回傳 [{ id, name, dashed, segments:[{a,b}], stars:[{key,name,az,alt,mag}], label:{az,alt}, maxAlt }]
+   * 其中 a/b 皆為 {key, az, alt}。連線與星點都直接給地平座標，
+   * 呼叫端（AR）只要投影即可，不需要再碰天文計算。
+   *
+   * @param opts.minAlt 整個星座最高星低於此仰角就略過（預設 -10，即幾乎全沉入地平線下才不畫）
+   */
+  function constellationLines(date, lat, lng, opts = {}) {
+    const jd = julianDate(date);
+    const minAlt = opts.minAlt != null ? opts.minAlt : -10;
+    const only = opts.only && opts.only.length ? new Set(opts.only) : null;
+    const horiz = new Map();
+    const at = (key) => {
+      if (horiz.has(key)) return horiz.get(key);
+      const st = STAR_BY_KEY.get(key);
+      if (!st) return null;
+      const h = equToHor(st.ra, st.dec, jd, lat, lng);
+      const v = { key, name: st.name, mag: st.mag, az: h.az, alt: h.alt };
+      horiz.set(key, v);
+      return v;
+    };
+
+    const out = [];
+    CONSTELLATIONS.forEach((c) => {
+      if (only && !only.has(c.id)) return;
+      const segments = [];
+      const members = new Map();
+      c.lines.forEach(([ka, kb]) => {
+        const a = at(ka), b = at(kb);
+        if (!a || !b) return;
+        members.set(ka, a); members.set(kb, b);
+        segments.push({ a, b });
+      });
+      if (!segments.length) return;
+      const stars = [...members.values()];
+      const maxAlt = Math.max(...stars.map((s) => s.alt));
+      if (maxAlt < minAlt) return;   // 整組沉在地平線下，不畫
+      out.push({ id: c.id, name: c.name, dashed: !!c.dashed, segments, stars, maxAlt, label: centroid(stars) });
+    });
+    return out;
+  }
+
+  /** 一群天體的方位/仰角中心（方位以向量平均，避免 0°/360° 接縫問題） */
+  function centroid(pts) {
+    let sx = 0, sy = 0, sa = 0;
+    pts.forEach((p) => { sx += cos(p.az); sy += sin(p.az); sa += p.alt; });
+    return { az: norm360(atan2(sy, sx)), alt: sa / pts.length };
   }
 
   // 黃道線取樣（β=0）→ 地平座標，供畫「黃道」用
@@ -223,8 +380,9 @@
   }
 
   global.Sky = {
-    skyObjects, eclipticPath, julianDate, gmst, lst, obliquity,
+    skyObjects, eclipticPath, constellationLines, centroid,
+    julianDate, gmst, lst, obliquity,
     sunEqu, moonEqu, planetEqu, equToHor, eclToEqu, geodeticToEcef, lookAngles,
-    PLANETS, STARS,
+    PLANETS, STARS, STAR_BY_KEY, CONSTELLATIONS, CONSTELLATION_KEYS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

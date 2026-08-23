@@ -12,10 +12,24 @@ node test/geo.test.js         # 執行單元測試（無相依）
 
 ## 程式結構
 - `js/geo.js` 地理/RF 數學（含 targetTopAlt 目標有效高度）
-- `js/elevation.js` 高程/遮蔽/繞射/涵蓋
+- `js/elevation.js` 高程/遮蔽/繞射/涵蓋/天際線輪廓
 - `js/parse.js` 匯入解析（JSON/CSV/GPX + 萬用座標）
-- `js/sky.js` 天文/衛星　·　`js/map.js` 地圖　·　`js/ar.js` AR 視角　·　`js/app.js` 主控
+- `js/sky.js` 天文/星座/衛星　·　`js/groups.js` 地點群組
+- `js/map.js` 地圖　·　`js/ar.js` AR 視角　·　`js/app.js` 主控
 - 數學或解析邏輯有變動時，請同步更新並執行 `test/geo.test.js`。
+
+## 實體型別
+- `me` 我的位置　·　`station` 站臺/中繼台　·　`peak` 參考山峰　·　`marker` 自訂標註
+- 站臺、山峰、標註都可帶 `group` 欄位；沒帶就依 type 落到預設群組。
+- 群組一律透過 `Groups.colorOf()` / `Groups.groupIdOf()` 取用，勿自行判斷顏色。
+- 新增實體型別時，`app.js` 的 `allTargets()`、`ar.js` 的陸地目標清單、
+  `map.js` 的 `render()` 三處都要同步。
+
+## 天際線（山體輪廓）
+- 仰角用可見光的等效地球半徑 `Elevation.K_OPTICAL`（≈1.13），
+  不是無線電的 4/3 —— AR 疊在相機畫面上才對得準。
+- 取資料（`computeSkyline`）與算稜線（`skylineFromRays`）分開，後者為純函式，
+  改動時請一併補測試。
 
 ## 用語
 - 一律使用「**站臺**」（不用「站台」）。

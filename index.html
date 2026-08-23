@@ -45,6 +45,15 @@
         <div class="paste-btns">
           <button id="btn-paste" title="把座標設為我的位置">📍 設為我的位置</button>
           <button id="btn-addstation" title="用座標新增一個標點/站臺">➕ 新增站臺</button>
+          <button id="btn-addmarker" title="用座標新增一個自訂位置標註">📌 新增標註</button>
+        </div>
+        <div class="clickadds">
+          <label>地圖點擊新增
+            <select id="opt-clickadds">
+              <option value="station">📡 站臺</option>
+              <option value="marker">📌 標註</option>
+            </select>
+          </label>
         </div>
         <div class="data-btns">
           <button id="btn-export" title="匯出站臺資料 JSON">匯出</button>
@@ -52,6 +61,11 @@
           <button id="btn-reset" title="還原為預設資料">還原預設</button>
           <input id="file-import" type="file" accept=".json,.csv,.tsv,.gpx,application/json,text/csv" hidden />
         </div>
+      </div>
+
+      <div class="grp-box">
+        <div class="grp-title">🎨 群組（點一下切換顯示）</div>
+        <div id="group-filter" class="group-filter"></div>
       </div>
 
       <div id="editor" class="editor"></div>
@@ -75,6 +89,17 @@
       </div>
       <div id="sky-hint" class="sky-hint"></div>
 
+      <div class="skyline-box">
+        <div class="skyline-title">⛰️ 山體輪廓
+          <button id="btn-skyline" class="mini" title="取周圍地形，在 AR 中沿山形畫出稜線與山體">畫出輪廓</button>
+        </div>
+        <div class="skyline-row">
+          <button id="btn-skyline-clear" class="mini2">清除</button>
+          <span class="skyline-note">沿著四周稜線畫出山形；近的稜線偏暖色、遠的偏藍</span>
+        </div>
+        <div id="skyline-status" class="skyline-status"></div>
+      </div>
+
       <details class="adv" id="sky-adv">
         <summary>天空：太陽/月亮/行星/星星</summary>
         <div class="opts">
@@ -87,7 +112,10 @@
               <option value="3">多 ≤3</option>
             </select>
           </label>
+          <label class="chk"><input id="opt-constel" type="checkbox" checked /> ✨ 星座連線</label>
         </div>
+        <div class="tip">星座連線含北斗七星、獵戶座、仙后座、天蠍座、南十字座，
+          以及夏/冬季大三角與指極線（虛線為輔助線，非正式星座）。</div>
       </details>
 
       <details class="adv">
@@ -112,7 +140,7 @@
       </div>
 
       <div class="list-box">
-        <div class="list-title">站臺 / 山峰（點選目標）
+        <div class="list-title">站臺 / 山峰 / 標註（點選目標）
           <button id="btn-analyze-all" class="mini" title="計算所有站臺的路徑遮蔽與餘裕">分析全部</button>
         </div>
         <div id="analyze-progress" class="analyze-progress"></div>
@@ -123,7 +151,7 @@
           <span><b class="b-bad">擋</b>被山擋住</span>
           <span>⭐最佳可通</span>
         </div>
-        <div class="tip">💡 在地圖上點空白處可新增站臺；點站臺可選取/編輯。移動位置請用「定位」「貼上座標」或編輯站臺裡的「移動」（已關閉手動拖曳，避免誤拖）。</div>
+        <div class="tip">💡 在地圖上點空白處會新增站臺或標註（依上方「地圖點擊新增」設定）；點既有項目可選取/編輯。移動位置請用「定位」「貼上座標」或編輯裡的「移動」（已關閉手動拖曳，避免誤拖）。</div>
       </div>
     </aside>
   </main>
@@ -133,7 +161,7 @@
   <script>
     (function () {
       var v = Date.now();
-      ['js/geo.js', 'js/elevation.js', 'js/parse.js', 'js/sky.js', 'js/data.js',
+      ['js/geo.js', 'js/elevation.js', 'js/parse.js', 'js/sky.js', 'js/groups.js', 'js/data.js',
        'js/map.js', 'js/ar.js', 'js/app.js'].forEach(function (f) {
         document.write('<script src="' + f + '?v=' + v + '"><\/script>');
       });
