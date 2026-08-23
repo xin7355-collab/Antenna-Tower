@@ -37,6 +37,9 @@
       this.pitch = 6;      // 略微抬頭
       this.state = null;
       this.usingSensor = false;
+      this._paintPending = false;  // rAF 節流用
+      this._skyCache = null;       // 天文計算快取（見 _skyData）
+      this._camBusy = false;       // 相機開關進行中，擋掉重複點擊
       this._build();
     }
 
@@ -73,6 +76,9 @@
       this.$cam = this.root.querySelector('.ar-cam');
 
       // 桌機拖曳 + 點擊對準
+      // 控制列的按鈕也在 root 裡，若讓它們啟動拖曳，手指稍微移動就會被判成
+      // 轉視角而吃掉點擊 —— 這正是「按相機/羅盤有時沒反應」的原因。
+      const isUI = (e) => !!(e.target && e.target.closest && e.target.closest('.ar-controls'));
       let drag = null, moved = 0;
       const down = (x, y) => { drag = { x, y, h: this.heading, p: this.pitch }; moved = 0; };
       const move = (x, y) => {
@@ -88,15 +94,29 @@
         if (drag && moved < 8 && x != null) this._tap(x, y); // 幾乎沒移動 = 點擊
         drag = null;
       };
-      this.root.addEventListener('mousedown', (e) => down(e.clientX, e.clientY));
+      this.root.addEventListener('mousedown', (e) => { if (isUI(e)) return; down(e.clientX, e.clientY); });
       window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
       window.addEventListener('mouseup', (e) => up(e.clientX, e.clientY));
-      this.root.addEventListener('touchstart', (e) => { const t = e.touches[0]; down(t.clientX, t.clientY); }, { passive: true });
-      this.root.addEventListener('touchmove', (e) => { const t = e.touches[0]; move(t.clientX, t.clientY); }, { passive: true });
-      this.root.addEventListener('touchend', (e) => { const t = e.changedTouches[0]; up(t.clientX, t.clientY); });
+      this.root.addEventListener('touchstart', (e) => {
+        if (isUI(e)) return;
+        const t = e.touches[0]; down(t.clientX, t.clientY);
+      }, { passive: true });
+      this.root.addEventListener('touchmove', (e) => {
+        if (!drag) return;
+        const t = e.touches[0]; move(t.clientX, t.clientY);
+      }, { passive: true });
+      this.root.addEventListener('touchend', (e) => {
+        if (!drag) return;
+        const t = e.changedTouches[0]; up(t.clientX, t.clientY);
+      });
 
-      this.root.querySelector('[data-act="sensor"]').onclick = () => this.enableSensor();
-      this.root.querySelector('[data-act="camera"]').onclick = () => this.toggleCamera();
+      this.$sensorBtn = this.root.querySelector('[data-act="sensor"]');
+      this.$sensorBtn.onclick = () => {
+        if (this.usingSensor) this.disableSensor(); else this.enableSensor();
+        setTimeout(() => this._syncControlState(), 50);
+      };
+      this.$camBtn = this.root.querySelector('[data-act="camera"]');
+      this.$camBtn.onclick = () => this.toggleCamera();
       this.root.querySelector('[data-act="full"]').onclick = () => this.toggleFullscreen();
       document.addEventListener('fullscreenchange', () => setTimeout(() => this._paint(), 100));
       // 尺寸/方向改變時重繪，避免殘留壞掉的版面
@@ -106,6 +126,41 @@
 
     /** 供外部（切回 AR 分頁時）重新繪製 */
     repaint() { this._paint(); }
+
+    /**
+     * 重繪排程：把同一個 animation frame 內的多次要求合併成一次。
+     * 羅盤事件約 60Hz，若每次都直接重繪，手機上會因為來不及畫而看起來卡住。
+     */
+    _paint() {
+      if (this._paintPending) return;
+      this._paintPending = true;
+      const run = () => { this._paintPending = false; this._paintNow(); };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+      else setTimeout(run, 16);
+    }
+
+    /**
+     * 天文計算快取。太陽/月亮/行星/星星的位置變化很慢，沒必要每一幀重算
+     * （一次要跑 5 顆行星的 Kepler 迭代 + 50 幾顆星的座標轉換）。
+     * 「現在」模式下每 20 秒換一次快取鍵，與 app.js 的天空更新節奏一致。
+     */
+    _skyData(st, me) {
+      const timeKey = st.settings.skyTime || Math.floor(Date.now() / 20000);
+      const key = [timeKey, me.lat.toFixed(3), me.lng.toFixed(3),
+        st.settings.starMag, !!st.settings.showConstellations].join('|');
+      if (this._skyCache && this._skyCache.key === key) return this._skyCache.val;
+      const date = st.settings.skyTime ? new Date(st.settings.skyTime) : new Date();
+      const val = {
+        objs: Sky.skyObjects(date, me.lat, me.lng, {
+          maxMag: st.settings.starMag != null ? st.settings.starMag : 2.2,
+          constellations: !!st.settings.showConstellations,
+        }),
+        ecliptic: Sky.eclipticPath(date, me.lat, me.lng, 5),
+        cons: st.settings.showConstellations ? Sky.constellationLines(date, me.lat, me.lng) : [],
+      };
+      this._skyCache = { key, val };
+      return val;
+    }
 
     toggleFullscreen() {
       const el = this.root;
@@ -117,16 +172,32 @@
     }
 
     async enableSensor() {
+      if (this.usingSensor) return;   // 已開啟就別重複註冊，否則每次事件都做兩份工
       try {
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
           const p = await DeviceOrientationEvent.requestPermission();
           if (p !== 'granted') return alert('未授權方向感測器');
         }
-        window.addEventListener('deviceorientationabsolute', (e) => this._onOrient(e), true);
-        window.addEventListener('deviceorientation', (e) => this._onOrient(e), true);
+        // 兩種事件都要聽（iOS 只有 deviceorientation + webkitCompassHeading，
+        // Android 多半是 deviceorientationabsolute），但只採用其中一種來源：
+        // 絕對方位一旦到過就不再理會相對方位，否則兩邊互相覆蓋會左右跳動。
+        this._absSeen = false;
+        this._onAbs = (e) => { this._absSeen = true; this._onOrient(e); };
+        this._onRel = (e) => { if (!this._absSeen) this._onOrient(e); };
+        window.addEventListener('deviceorientationabsolute', this._onAbs, true);
+        window.addEventListener('deviceorientation', this._onRel, true);
         this.usingSensor = true;
       } catch (err) { alert('此裝置不支援方向感測器'); }
+    }
+
+    /** 關閉羅盤，回到拖曳操作 */
+    disableSensor() {
+      if (!this.usingSensor) return;
+      window.removeEventListener('deviceorientationabsolute', this._onAbs, true);
+      window.removeEventListener('deviceorientation', this._onRel, true);
+      this.usingSensor = false;
+      this._paint();
     }
 
     _onOrient(e) {
@@ -150,14 +221,22 @@
       this._paint();
     }
 
+    /** 關閉相機並復原背景。開啟失敗時也走這裡收尾，避免卡在半開狀態。 */
+    _stopCamera() {
+      this.$cam.style.display = 'none';
+      this.root.classList.remove('ar-cam-on');
+      const s = this.$cam.srcObject;
+      if (s && s.getTracks) s.getTracks().forEach((t) => t.stop());
+      this.$cam.srcObject = null;
+      this.camOn = false;
+      this._syncControlState();
+    }
+
     async toggleCamera() {
-      // 關閉相機：停止串流、恢復天空/地面背景
-      if (this.$cam.style.display !== 'none') {
-        this.$cam.style.display = 'none';
-        this.root.classList.remove('ar-cam-on');
-        if (this.$cam.srcObject) this.$cam.srcObject.getTracks().forEach((t) => t.stop());
-        return;
-      }
+      // 開關進行中就忽略，連點兩下會同時要到兩個串流、其中一個漏掉不會關
+      if (this._camBusy) return;
+      if (this.camOn) { this._stopCamera(); return; }
+      this._camBusy = true;
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('此瀏覽器不支援相機（請用 Safari/Chrome 並以 https 開啟）');
@@ -178,15 +257,34 @@
         this.$cam.srcObject = stream;
         this.$cam.style.display = 'block';
         this.root.classList.add('ar-cam-on'); // 隱藏天空/地面漸層讓鏡頭透出
+        this.camOn = true;
         try { await this.$cam.play(); } catch (_) { /* 部分瀏覽器 autoplay 屬性已接手 */ }
+        this._syncControlState();
         this._paint();
       } catch (err) {
+        this._stopCamera();   // 收乾淨，下次再按才不會以為已經開著
         const msg = (err && err.name === 'NotAllowedError')
           ? '相機權限被拒。請在瀏覽器網址列的權限設定允許「相機」後再試。'
-          : (location.protocol !== 'https:'
-              ? '相機需要 HTTPS。請用 https 的網址開啟。'
-              : '無法開啟相機：' + (err && err.message ? err.message : err));
+          : (err && (err.name === 'NotReadableError' || err.name === 'AbortError'))
+            ? '相機被其它 App 佔用（或系統暫時鎖住）。請關掉其它使用相機的程式再試。'
+            : (location.protocol !== 'https:'
+                ? '相機需要 HTTPS。請用 https 的網址開啟。'
+                : '無法開啟相機：' + (err && err.message ? err.message : err));
         alert(msg);
+      } finally {
+        this._camBusy = false;
+      }
+    }
+
+    /** 讓控制列按鈕反映目前狀態（開著的用實心底色標示） */
+    _syncControlState() {
+      if (this.$sensorBtn) {
+        this.$sensorBtn.classList.toggle('on', !!this.usingSensor);
+        this.$sensorBtn.textContent = this.usingSensor ? '🧭 羅盤開' : '🧭 羅盤';
+      }
+      if (this.$camBtn) {
+        this.$camBtn.classList.toggle('on', !!this.camOn);
+        this.$camBtn.textContent = this.camOn ? '📷 相機開' : '📷 相機';
       }
     }
 
@@ -212,7 +310,7 @@
       this._paint();
     }
 
-    _paint() {
+    _paintNow() {
       if (!this.state) return;
       // 視角被隱藏（切到地圖分頁）時尺寸為 0，若此時重繪會把版面算壞，
       // 導致切回來「一半黑」。直接略過，等重新可見時再繪。
@@ -278,11 +376,11 @@
 
       // 1b) 天文層（太陽/月亮/行星/星星）+ 黃道線
       if (st.settings.showSky && global.Sky) {
-        const date = st.settings.skyTime ? new Date(st.settings.skyTime) : new Date();
-        this._paintEcliptic(Sky.eclipticPath(date, me.lat, me.lng, 5), angDiff, projX, projY, W, H);
+        const sky = this._skyData(st, me);
+        this._paintEcliptic(sky.ecliptic, angDiff, projX, projY, W, H);
         // 星座連線（北斗七星、獵戶座…）＋ 星座名稱標籤
         if (st.settings.showConstellations) {
-          const cons = Sky.constellationLines(date, me.lat, me.lng);
+          const cons = sky.cons;
           this._paintConstellations(cons, angDiff, projX, projY, W, H);
           cons.forEach((c) => {
             if (c.label.alt < 0 || Math.abs(angDiff(c.label.az)) > HFOV / 2) return;
@@ -299,11 +397,7 @@
         } else {
           this.$constel.innerHTML = '';
         }
-        const objs = Sky.skyObjects(date, me.lat, me.lng, {
-          maxMag: st.settings.starMag != null ? st.settings.starMag : 2.2,
-          constellations: !!st.settings.showConstellations,
-        });
-        objs.forEach((o) => {
+        sky.objs.forEach((o) => {
           if (o.alt < -2) return;                        // 地平線下不畫
           if (Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
           const selected = o.id === st.selectedId;

@@ -18,6 +18,44 @@
 
   const keyOf = (p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // Open-Meteo 是免費共用服務，短時間內連續丟幾十個請求會被回 429。
+  // 這裡自己節流（請求之間留間隔）並在被限流時退避重試。
+  const MIN_GAP_MS = 130;
+  let lastReqAt = 0;
+
+  /** 送出一個批次查詢，遇到 429/5xx/網路錯誤自動退避重試。 */
+  async function requestChunk(url, opts = {}) {
+    const maxRetry = opts.maxRetry != null ? opts.maxRetry : 4;
+    for (let attempt = 0; ; attempt++) {
+      const gap = MIN_GAP_MS - (Date.now() - lastReqAt);
+      if (gap > 0) await sleep(gap);
+      lastReqAt = Date.now();
+
+      let res = null, netErr = null;
+      try { res = await fetch(url); } catch (e) { netErr = e; }
+
+      if (res && res.ok) return res.json();
+
+      const status = res ? res.status : 0;
+      const retriable = netErr || status === 429 || status >= 500;
+      if (retriable && attempt < maxRetry) {
+        // 伺服器有給 Retry-After 就聽它的，否則指數退避
+        let wait = 800 * Math.pow(2, attempt);
+        const ra = res && res.headers && res.headers.get ? Number(res.headers.get('Retry-After')) : NaN;
+        if (isFinite(ra) && ra > 0) wait = Math.max(wait, ra * 1000);
+        if (opts.onRetry) opts.onRetry(attempt + 1, wait, status);
+        await sleep(wait);
+        continue;
+      }
+      if (netErr) throw netErr;
+      throw new Error(status === 429
+        ? '高程服務請求過於頻繁（429），重試多次仍被限流；請等一分鐘再試'
+        : `Elevation API ${status}`);
+    }
+  }
+
   /**
    * 批次查詢多點海拔。Open-Meteo 單次上限約 100 點，超過自動分批。
    * 回傳與輸入等長的海拔陣列 (m)；查不到的填 null。
@@ -33,22 +71,29 @@
     const CHUNK = 100;
     const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
     if (onProgress) onProgress(points.length - need.length, points.length);
+    let failed = 0;
     for (let s = 0; s < need.length; s += CHUNK) {
       const slice = need.slice(s, s + CHUNK);
       const lats = slice.map((x) => x.p.lat.toFixed(5)).join(',');
       const lngs = slice.map((x) => x.p.lng.toFixed(5)).join(',');
       const url = `${API}?latitude=${lats}&longitude=${lngs}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Elevation API ${res.status}`);
-      const json = await res.json();
-      const arr = json.elevation || [];
-      slice.forEach((x, j) => {
-        const e = arr[j];
-        if (typeof e === 'number') {
-          cache.set(x.k, e);
-          out[x.i] = e;
-        }
-      });
+      try {
+        const json = await requestChunk(url, { onRetry: opts.onRetry, maxRetry: opts.maxRetry });
+        const arr = json.elevation || [];
+        slice.forEach((x, j) => {
+          const e = arr[j];
+          if (typeof e === 'number') {
+            cache.set(x.k, e);
+            out[x.i] = e;
+          }
+        });
+      } catch (err) {
+        // tolerateFailures：拿到多少畫多少（天際線少幾個方位仍可用），
+        // 其餘呼叫端（路徑分析）維持原本的直接拋出。
+        if (!opts.tolerateFailures) throw err;
+        failed += slice.length;
+        if (opts.onChunkError) opts.onChunkError(err, failed);
+      }
       if (onProgress) onProgress(points.length - need.length + Math.min(s + CHUNK, need.length), points.length);
     }
     return out;
@@ -306,9 +351,12 @@
    * @returns { at:{lat,lng}, obsAlt, points:[{az, elev, dist, ground}] }
    */
   async function computeSkyline(observer, opts = {}) {
+    // 點數直接決定請求數（每 100 點一個請求），而 open-meteo 會限流，
+    // 所以取樣密度以「夠畫出輪廓」為準，不貪多：96×22 = 2112 點 ≈ 22 個請求。
     const {
-      eyeHeight = 2, azimuths = 120, samples = 28,
-      maxRangeKm = 90, minRangeM = 250, k = K_OPTICAL, onProgress = null,
+      eyeHeight = 2, azimuths = 96, samples = 22,
+      maxRangeKm = 90, minRangeM = 250, k = K_OPTICAL,
+      onProgress = null, onRetry = null,
     } = opts;
     const maxRangeM = maxRangeKm * 1000;
 
@@ -330,13 +378,24 @@
     const flat = rays.flatMap((r) => r.pts);
     // 觀測者本身的地面高度也一起查（alt 可能還沒填）
     flat.push({ lat: observer.lat, lng: observer.lng, dist: 0 });
-    const elevs = await fetchElevations(flat, { onProgress });
+    let lastError = null;
+    const elevs = await fetchElevations(flat, {
+      onProgress, onRetry, tolerateFailures: true,
+      onChunkError: (err) => { lastError = err; },
+    });
     let idx = 0;
     rays.forEach((r) => r.pts.forEach((p) => { p.ground = elevs[idx++]; }));
     const centerGround = elevs[idx] != null ? elevs[idx] : (observer.alt || 0);
     const obsAlt = centerGround + eyeHeight;
 
-    return { at: { lat: observer.lat, lng: observer.lng }, obsAlt, points: skylineFromRays(rays, obsAlt, k) };
+    const points = skylineFromRays(rays, obsAlt, k);
+    const got = points.filter((p) => p.elev != null).length;
+    if (!got) throw (lastError || new Error('取不到任何高程資料'));
+    return {
+      at: { lat: observer.lat, lng: observer.lng }, obsAlt, points,
+      coverage: got / points.length,      // 實際取到的方位比例
+      error: lastError,                   // 部分失敗時保留原因供提示
+    };
   }
 
   /**

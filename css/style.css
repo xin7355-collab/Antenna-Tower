@@ -194,6 +194,8 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 
 .ar-controls { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; align-items: center; }
 .ar-controls button { background: rgba(0,0,0,.55); color: #fff; border: 1px solid rgba(255,255,255,.3); border-radius: 999px; padding: 7px 12px; cursor: pointer; }
+/* 開著的功能給明確回饋，免得不確定羅盤/相機到底有沒有開 */
+.ar-controls button.on { background: #2f6fff; border-color: #7aa8ff; font-weight: 700; }
 .ar-hint { font-size: 11px; color: rgba(255,255,255,.7); text-shadow: 0 1px 2px #000; }
 
 /* ===== 響應式：窄螢幕改上下堆疊 ===== */

@@ -31,16 +31,22 @@
   }
 
   class MapView {
-    constructor(elId, handlers = {}) {
+    constructor(elId, handlers = {}, opts = {}) {
       this.h = handlers;
       this.markers = new Map();
       this.pathLayer = null;
       this.coverageLayer = null;
       this.viewshedLayer = null;
+      // 地圖是在分頁隱藏（尺寸 0）時建立的，此時任何 fitBounds 都算不準。
+      // 等第一次真的顯示出來，再定位到我的位置。
+      this._needsInitialView = true;
+      this._pendingFit = null;
+      this.initialZoom = opts.zoom != null ? opts.zoom : 11;
 
       const L = global.L;
       this.L = L;
-      this.map = L.map(elId, { zoomControl: true }).setView([23.5, 121.0], 8);
+      const c = opts.center || { lat: 23.5, lng: 121.0 };
+      this.map = L.map(elId, { zoomControl: true }).setView([c.lat, c.lng], this.initialZoom);
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© OpenStreetMap',
@@ -110,7 +116,28 @@
       if (run.length) layers.push(L.polyline(run, { color: '#e23b3b', weight: 6, opacity: 0.95 }));
 
       this.pathLayer = L.layerGroup(layers).addTo(this.map);
-      this.map.fitBounds(L.latLngBounds(latlngs).pad(0.3));
+      this._fitOrDefer(L.latLngBounds(latlngs).pad(0.3));
+    }
+
+    /** 地圖還沒有實際尺寸時（分頁隱藏中）先記下來，顯示後再套用。 */
+    _fitOrDefer(bounds) {
+      if (this.map.getSize().x > 0) this.map.fitBounds(bounds);
+      else this._pendingFit = bounds;
+    }
+
+    /**
+     * 分頁切到地圖時呼叫：重算尺寸，並在「第一次顯示」時定位到我的位置。
+     * 之後再進來就沿用使用者目前的視野，不會把他拉走。
+     */
+    onShown(me) {
+      this.map.invalidateSize();
+      if (this._needsInitialView) {
+        this._needsInitialView = false;
+        this._pendingFit = null;      // 初次進來以「我的位置」為準
+        if (me) this.map.setView([me.lat, me.lng], this.initialZoom);
+        return;
+      }
+      if (this._pendingFit) { this.map.fitBounds(this._pendingFit); this._pendingFit = null; }
     }
 
     clearPath() {
@@ -164,7 +191,7 @@
       this.viewshedLayer = L.polygon(latlngs, {
         color, weight: 2, fillColor: color, fillOpacity: 0.18, dashArray: '4 3',
       }).addTo(this.map);
-      this.map.fitBounds(this.viewshedLayer.getBounds().pad(0.2));
+      this._fitOrDefer(this.viewshedLayer.getBounds().pad(0.2));
     }
 
     focus(ent) {

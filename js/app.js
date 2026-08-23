@@ -522,20 +522,32 @@
     const el = document.getElementById('skyline-status');
     if (btn) btn.disabled = true;
     try {
+      let retrying = '';
       const sl = await Elevation.computeSkyline(state.me, {
         eyeHeight: state.me.antenna || 2,
         onProgress: (done, total) => {
-          if (el) el.textContent = `⏳ 取地形中… ${Math.round((done / total) * 100)}%`;
+          if (el) el.textContent = `⏳ 取地形中… ${Math.round((done / total) * 100)}%${retrying}`;
+        },
+        onRetry: (n, waitMs, status) => {
+          retrying = status === 429
+            ? `（服務忙碌，${Math.round(waitMs / 1000)} 秒後自動重試 ${n}）`
+            : `（連線不順，重試 ${n}）`;
+          if (el) el.textContent = `⏳ 取地形中…${retrying}`;
         },
       });
       state.skyline = sl;
       const peaks = Elevation.skylinePeaks(sl.points);
-      if (el) el.innerHTML = `<span class="ok">✓ 已畫出山體輪廓（${sl.points.length} 個方位、` +
-        `找到 ${peaks.length} 座山頭）</span>`;
+      const partial = sl.coverage < 0.999;
+      if (el) el.innerHTML = partial
+        ? `<span class="warn">◐ 已畫出部分輪廓（取到 ${Math.round(sl.coverage * 100)}% 方位、` +
+          `${peaks.length} 座山頭）。稍後再按一次可補齊剩下的。</span>`
+        : `<span class="ok">✓ 已畫出山體輪廓（${sl.points.length} 個方位、` +
+          `找到 ${peaks.length} 座山頭）</span>`;
       showARTab();
       arView.render(state);
     } catch (err) {
-      if (el) el.innerHTML = `<span class="warn">⚠️ 計算失敗：${err.message}（需連線 open-meteo.com）</span>`;
+      const rate = /429|過於頻繁/.test(err.message);
+      if (el) el.innerHTML = `<span class="warn">⚠️ ${err.message}${rate ? '' : '（需連線 open-meteo.com）'}</span>`;
     }
     if (btn) btn.disabled = false;
     computingSky = false;
@@ -942,7 +954,7 @@
         document.querySelectorAll('.view').forEach((x) => x.classList.remove('on'));
         b.classList.add('on');
         document.getElementById(b.dataset.view).classList.add('on');
-        if (b.dataset.view === 'view-map') setTimeout(() => mapView.map.invalidateSize(), 60);
+        if (b.dataset.view === 'view-map') setTimeout(() => mapView.onShown(state.me), 60);
         else if (b.dataset.view === 'view-ar' && arView) setTimeout(() => arView.repaint(), 60);
       };
     });
@@ -1030,12 +1042,13 @@
     try {
       if (global.L) {
         global.L.Icon.Default.imagePath = 'vendor/leaflet/images/';
-        mapView = new MapView('map', handlers);
+        // 一開啟地圖就落在「我的位置」附近，而不是整個台灣的遠景
+        mapView = new MapView('map', handlers, { center: state.me, zoom: 11 });
       } else {
         throw new Error('Leaflet 未載入');
       }
     } catch (err) {
-      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, setSatellite() {}, focus() {}, map: { invalidateSize() {} } };
+      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, setSatellite() {}, focus() {}, onShown() {}, map: { invalidateSize() {} } };
       const el = document.getElementById('map');
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }
@@ -1049,5 +1062,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 
-  global.App = { state, select, getArView: () => arView, render };
+  global.App = { state, select, getArView: () => arView, getMapView: () => mapView, render };
 })(typeof window !== 'undefined' ? window : globalThis);

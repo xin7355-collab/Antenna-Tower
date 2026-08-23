@@ -114,7 +114,7 @@ console.log('elevation — 地形涵蓋多邊形 (mock fetch)');
     });
 }
 
-function runParseTests() {
+async function runParseTests() {
   console.log('parse — CSV/GPX/JSON');
   const csv = 'name,lat,lng,alt,antenna,freq\nA,23.4,120.9,3000,10,145.5\n壞,,,\n';
   const r1 = Parse.parseStations(csv, 'x.csv');
@@ -288,6 +288,49 @@ function runParseTests() {
     ok('平坦天際線沒有山頭',
       Elevation.skylinePeaks(ring.map((p) => ({ ...p, elev: 5 }))).length === 0);
     ok('點數不足時回傳空陣列', Elevation.skylinePeaks([{ az: 0, elev: 1 }]).length === 0);
+  }
+
+  console.log('elevation — 高程服務限流處理 (429)');
+  {
+    const savedFetch = global.fetch;
+    const pt = [{ lat: 10.1234, lng: 20.1234 }];
+
+    // 1) 被限流且不重試 + tolerateFailures → 回 null，不整個失敗
+    let calls = 0;
+    global.fetch = async () => { calls++; return { ok: false, status: 429, headers: { get: () => null } }; };
+    let chunkErr = null;
+    const soft = await Elevation.fetchElevations(pt, {
+      maxRetry: 0, tolerateFailures: true, onChunkError: (e) => { chunkErr = e; },
+    });
+    ok('429 且容忍失敗 → 該點為 null', soft.length === 1 && soft[0] === null);
+    ok('429 訊息說明是限流', /429|頻繁/.test(chunkErr.message));
+    ok('maxRetry=0 只送一次', calls === 1);
+
+    // 2) 不容忍失敗時要拋出（路徑分析仍需要明確失敗）
+    calls = 0;
+    let threw = null;
+    try {
+      await Elevation.fetchElevations([{ lat: 11.5, lng: 21.5 }], { maxRetry: 0 });
+    } catch (e) { threw = e; }
+    ok('未開容忍時 429 會拋出', threw !== null && /429|頻繁/.test(threw.message));
+
+    // 3) 第一次 429、第二次成功 → 自動重試後拿到資料
+    calls = 0;
+    const retries = [];
+    global.fetch = async (url) => {
+      calls++;
+      if (calls === 1) return { ok: false, status: 429, headers: { get: (h) => (h === 'Retry-After' ? '0' : null) } };
+      const u = new URL(url);
+      const n = u.searchParams.get('latitude').split(',').length;
+      return { ok: true, json: async () => ({ elevation: Array(n).fill(1234) }) };
+    };
+    const retried = await Elevation.fetchElevations([{ lat: 12.75, lng: 22.75 }], {
+      maxRetry: 2, onRetry: (n, wait, status) => retries.push({ n, status }),
+    });
+    ok('429 後自動重試並成功取得高程', retried[0] === 1234);
+    ok('重試了一次且回報狀態碼', retries.length === 1 && retries[0].status === 429);
+
+    global.fetch = savedFetch;
   }
 
   console.log('parse — 標註與群組欄位');
