@@ -56,7 +56,7 @@
     state.me.lat = lat;
     state.me.lng = lng;
     state.analysisById = {};
-    state.skyline = null;   // 換位置了，舊的山體輪廓不再適用
+    state.skyline = null;   // 換位置了，舊的山體輪廓不再適用（saveState 在下面）
     const slEl = document.getElementById('skyline-status');
     if (slEl) slEl.textContent = '';
     saveState();
@@ -72,6 +72,9 @@
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
         me: state.me, stations: state.stations, markers: state.markers, settings: state.settings,
+        // 輪廓一併存起來：重開 App 不必再跟高程服務要一次（那是被限流的主因）
+        skyline: state.skyline ? { at: state.skyline.at, obsAlt: state.skyline.obsAlt,
+          points: state.skyline.points, coverage: state.skyline.coverage } : null,
       }));
     } catch (_) { /* localStorage 可能被停用，忽略 */ }
   }
@@ -84,6 +87,11 @@
       if (Array.isArray(d.stations)) state.stations = d.stations;
       if (Array.isArray(d.markers)) state.markers = d.markers;
       if (d.settings) Object.assign(state.settings, d.settings);
+      // 只有在「還站在同一個地方」時才沿用舊輪廓；移動超過 300m 就作廢
+      if (d.skyline && d.skyline.at && Array.isArray(d.skyline.points)) {
+        const moved = Geo.distance(d.skyline.at, state.me);
+        if (moved < 300) state.skyline = d.skyline;
+      }
     } catch (_) { /* 資料毀損則忽略 */ }
   }
 
@@ -107,16 +115,26 @@
   }
 
   /** 群組欄位變更：選到「新增群組」就問名稱並即時註冊 */
-  function applyGroupChange(t, sel) {
+  async function applyGroupChange(t, sel) {
     if (sel.value === '__new__') {
-      const name = prompt('新群組名稱：', '');
-      if (!name) { sel.value = Groups.groupIdOf(t) || ''; return false; }
-      Groups.register(name, name);
-      t.group = name;
+      const name = await UI.ask('新增群組', '', '例如：南橫線、私人中繼');
+      if (!name || !name.trim()) { sel.value = Groups.groupIdOf(t) || ''; return false; }
+      Groups.register(name.trim(), name.trim());
+      t.group = name.trim();
     } else {
       t.group = sel.value;
     }
     return true;
+  }
+
+  /** 新增項目後把游標放到名稱欄，直接就能改名（取代跳出來問名字） */
+  function focusEditorName() {
+    setTimeout(() => {
+      const inp = document.querySelector('#editor input[data-f="name"], #editor input[data-mf="name"]');
+      if (!inp) return;
+      inp.focus();
+      if (inp.select) inp.select();
+    }, 60);
   }
 
   function renderEditor() {
@@ -201,8 +219,8 @@
       };
     });
     const grpSel = document.getElementById('ed-group');
-    if (grpSel) grpSel.onchange = () => {
-      if (!applyGroupChange(t, grpSel)) return;
+    if (grpSel) grpSel.onchange = async () => {
+      if (!await applyGroupChange(t, grpSel)) return;
       saveState(); render(); select(t.id);
     };
     // 貼座標把此站臺移過去
@@ -210,7 +228,7 @@
     const moveInp = document.getElementById('ed-movecoord');
     const doMove = () => {
       const ll = Parse.parseLatLng(moveInp.value);
-      if (!ll) { alert('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）'); return; }
+      if (!ll) { UI.toast('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）', 'warn'); return; }
       t.lat = ll.lat; t.lng = ll.lng;
       t.alt = 0;                         // 高度重抓
       state.analysisById = {};
@@ -227,8 +245,8 @@
     moveInp.onkeydown = (e) => { if (e.key === 'Enter') doMove(); };
 
     document.getElementById('ed-viewshed').onclick = () => computeViewshed(t);
-    document.getElementById('ed-del').onclick = () => {
-      if (!confirm(`確定刪除「${t.name}」？`)) return;
+    document.getElementById('ed-del').onclick = async () => {
+      if (!await UI.confirm('刪除站臺', `確定刪除「${t.name}」？此動作無法復原。`, '刪除', true)) return;
       state.stations = state.stations.filter((s) => s.id !== t.id);
       delete state.analysisById[t.id];
       state.selectedId = null;
@@ -296,14 +314,14 @@
       b.onclick = () => { t.icon = b.dataset.ico; saveState(); render(); select(t.id); };
     });
     const mg = document.getElementById('ed-mgroup');
-    if (mg) mg.onchange = () => {
-      if (!applyGroupChange(t, mg)) return;
+    if (mg) mg.onchange = async () => {
+      if (!await applyGroupChange(t, mg)) return;
       saveState(); render(); select(t.id);
     };
     const mInp = document.getElementById('ed-mmovecoord');
     const doMove = () => {
       const ll = Parse.parseLatLng(mInp.value);
-      if (!ll) { alert('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）'); return; }
+      if (!ll) { UI.toast('無法辨識座標，請確認格式（如 24.28,121.03 或 24°17′N 121°02′E）', 'warn'); return; }
       t.lat = ll.lat; t.lng = ll.lng; t.alt = 0;
       state.analysisById = {};
       mInp.value = '';
@@ -315,8 +333,8 @@
     };
     document.getElementById('ed-mmovebtn').onclick = doMove;
     mInp.onkeydown = (e) => { if (e.key === 'Enter') doMove(); };
-    document.getElementById('ed-mdel').onclick = () => {
-      if (!confirm(`確定刪除標註「${t.name}」？`)) return;
+    document.getElementById('ed-mdel').onclick = async () => {
+      if (!await UI.confirm('刪除標註', `確定刪除「${t.name}」？此動作無法復原。`, '刪除', true)) return;
       state.markers = state.markers.filter((m) => m.id !== t.id);
       delete state.analysisById[t.id];
       state.selectedId = null;
@@ -536,6 +554,7 @@
         },
       });
       state.skyline = sl;
+      saveState();          // 存起來，下次開 App 不必再跟高程服務要一次
       const peaks = Elevation.skylinePeaks(sl.points);
       const partial = sl.coverage < 0.999;
       if (el) el.innerHTML = partial
@@ -555,6 +574,7 @@
 
   function clearSkyline() {
     state.skyline = null;
+    saveState();
     const el = document.getElementById('skyline-status');
     if (el) el.textContent = '';
     arView.render(state);
@@ -754,7 +774,12 @@
     if (arView) arView.render(state);
   }
   function satTicker() {
-    if (state.settings.showSat && !satTimer) { satJustOn = true; fetchISS(); satTimer = setInterval(fetchISS, 5000); }
+    // 10 秒一次已足夠（ISS 每秒約 7.6 km，方位變化不快），也省電省流量；
+    // 分頁切到背景時直接跳過，不必在使用者沒看的時候一直抓。
+    if (state.settings.showSat && !satTimer) {
+      satJustOn = true; fetchISS();
+      satTimer = setInterval(() => { if (!document.hidden) fetchISS(); }, 10000);
+    }
     if (!state.settings.showSat && satTimer) {
       clearInterval(satTimer); satTimer = null; state.satellites = [];
       if (mapView.setSatellite) mapView.setSatellite(null);
@@ -872,10 +897,10 @@
           mapView.clearPath();
           render();
           if (mapView.focus) mapView.focus(state.me);
-          alert(`已匯入 ${(d.stations || []).length} 個站臺` +
+          UI.toast(`已匯入 ${(d.stations || []).length} 個站臺` +
             (nMk ? `、${nMk} 個標註` : '') +
-            `（${d.mode === 'replace' ? '取代' : '追加'}）`);
-        } catch (err) { alert('匯入失敗：' + err.message); }
+            `（${d.mode === 'replace' ? '取代' : '追加'}）`, 'ok');
+        } catch (err) { UI.alert('匯入失敗', err.message); }
       };
       reader.readAsText(file);
       fileInput.value = '';
@@ -902,7 +927,7 @@
     const applyPaste = () => {
       const inp = document.getElementById('paste-coord');
       const ll = Parse.parseLatLng(inp.value);
-      if (!ll) { alert('無法辨識座標格式，請再確認'); return; }
+      if (!ll) { UI.toast('無法辨識座標格式，請再確認', 'warn'); return; }
       inp.value = '';                       // 先清空，立刻給回饋
       setMyLocation(ll.lat, ll.lng);
     };
@@ -913,35 +938,25 @@
     document.getElementById('btn-addstation').onclick = () => {
       const inp = document.getElementById('paste-coord');
       const ll = Parse.parseLatLng(inp.value);
-      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增站臺」'); return; }
-      const name = prompt('新站臺名稱：', '新標點');
-      if (name == null) return;
-      const st = { id: `st-${Date.now()}`, type: 'station', name: name || '新標點', lat: ll.lat, lng: ll.lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
-      state.stations.push(st);
+      if (!ll) { UI.toast('請先在上面貼上座標（任何格式），再按「新增站臺」', 'warn'); return; }
       inp.value = '';
-      saveState();
-      render();
-      select(st.id);              // 選取並對準
-      if (mapView.focus) mapView.focus(st);
-      Elevation.elevationAt(st).then((e) => {
-        if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
-      }).catch(() => {});
+      addStation(ll.lat, ll.lng);
     };
 
     // 用座標新增一個自訂標註（純標記，不是通聯對象）
     document.getElementById('btn-addmarker').onclick = () => {
       const inp = document.getElementById('paste-coord');
       const ll = Parse.parseLatLng(inp.value);
-      if (!ll) { alert('請先在上面貼上座標（任何格式），再按「新增標註」'); return; }
-      addMarker(ll.lat, ll.lng);
+      if (!ll) { UI.toast('請先在上面貼上座標（任何格式），再按「新增標註」', 'warn'); return; }
       inp.value = '';
+      addMarker(ll.lat, ll.lng);
     };
 
     document.getElementById('btn-locate').onclick = () => {
-      if (!navigator.geolocation) return alert('此裝置不支援定位');
+      if (!navigator.geolocation) return UI.toast('此裝置不支援定位', 'warn');
       navigator.geolocation.getCurrentPosition(
         (pos) => setMyLocation(pos.coords.latitude, pos.coords.longitude),
-        () => alert('定位失敗')
+        () => UI.toast('定位失敗。請確認已允許此網站取得位置（iOS：設定 → 隱私權 → 定位服務 → Safari）', 'warn', 5000)
       );
     };
 
@@ -983,20 +998,42 @@
     setSkyHint(`👉 ${pick.name}：往 方位 ${Math.round(pick.az)}° ${Geo.compass8(pick.az)}、仰角 ${Math.round(pick.alt)}° 看（共 ${up.length} 個天體在地平線上）`);
   }
 
+  /**
+   * 新增站臺。不再跳出對話框問名字 —— 直接用預設名建立、選取並把游標
+   * 放到編輯器的名稱欄，少一次打斷（iOS 獨立模式下 prompt 還可能無效）。
+   */
+  function addStation(lat, lng) {
+    const st = {
+      id: `st-${Date.now()}`, type: 'station', name: `站臺 ${state.stations.length + 1}`,
+      lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true,
+    };
+    state.stations.push(st);
+    saveState();
+    render();
+    select(st.id);
+    if (mapView.focus) mapView.focus(st);
+    focusEditorName();
+    UI.toast(`已新增「${st.name}」，可直接改名`, 'ok');
+    Elevation.elevationAt(st).then((e) => {
+      if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
+    }).catch(() => {});
+    return st;
+  }
+
   /** 新增一個自訂位置標註；高程在背景補上 */
   function addMarker(lat, lng, presetName) {
-    const name = presetName != null ? presetName
-      : prompt('標註名稱：', `標註 ${state.markers.length + 1}`);
-    if (name == null) return null;
     const mk = {
       id: `mk-${Date.now()}`, type: 'marker', group: 'mark', icon: '📌',
-      name: name || '新標註', lat, lng, alt: 0, note: '', custom: true,
+      name: presetName || `標註 ${state.markers.length + 1}`,
+      lat, lng, alt: 0, note: '', custom: true,
     };
     state.markers.push(mk);
     saveState();
     render();
     select(mk.id);
     if (mapView.focus) mapView.focus(mk);
+    focusEditorName();
+    UI.toast(`已新增「${mk.name}」，可直接改名`, 'ok');
     Elevation.elevationAt(mk).then((e) => {
       if (e != null) { mk.alt = Math.round(e); saveState(); render(); }
     }).catch(() => {});
@@ -1022,17 +1059,7 @@
     onAddStation: (lat, lng) => {
       // 點地圖要新增什麼，由面板的「地圖點擊新增」決定
       if (state.settings.mapClickAdds === 'marker') { addMarker(lat, lng); return; }
-      const name = prompt('新增無線電站臺名稱：', `站臺 ${state.stations.length + 1}`);
-      if (name == null) return;
-      const st = { id: `st-${Date.now()}`, type: 'station', name, lat, lng, alt: 0, antenna: 6, freqMHz: state.settings.freqMHz, custom: true };
-      state.stations.push(st);
-      saveState();
-      render();
-      select(st.id);
-      // 高程在背景補上
-      Elevation.elevationAt(st).then((e) => {
-        if (e != null) { st.alt = Math.round(e); saveState(); render(); if (state.selectedId === st.id) select(st.id); }
-      }).catch(() => {});
+      addStation(lat, lng);
     },
   };
 
@@ -1055,6 +1082,12 @@
     arView = new ARView('view-ar', handlers);
     bindControls();
     render();
+    // 沿用上次存下來的輪廓時要講清楚，免得以為是這次算的
+    if (state.skyline) {
+      const el = document.getElementById('skyline-status');
+      if (el) el.innerHTML = `<span class="ok">✓ 已沿用上次算好的山體輪廓` +
+        `（${state.skyline.points.length} 個方位）。位置有變或想重算就按「畫出輪廓」。</span>`;
+    }
     // 預設選第一個站臺展示
     if (state.stations[0]) select(state.stations[0].id);
   }

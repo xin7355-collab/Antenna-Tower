@@ -128,6 +128,7 @@ js/elevation.js       高程 API + 地形剖面 + 遮蔽分析 + Deygout + 涵�
 js/parse.js           匯入解析（JSON / CSV / GPX）+ 萬用座標解析
 js/sky.js             天文層：太陽/月亮/行星/亮星/星座連線/衛星視角換算
 js/groups.js          地點群組：註冊、配色、分堆、顯示過濾
+js/ui.js              對話框與提示（取代 alert/confirm/prompt）
 js/data.js            範例站臺/山峰/標註資料（座標為概略值，請自行校正）
 js/map.js             Leaflet 地圖視角（路徑、涵蓋圈、地形涵蓋多邊形）
 js/ar.js              AR 全景視角（山體輪廓 + 陸地 + 天文 + 星座 + 衛星、全螢幕、對準 HUD）

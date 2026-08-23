@@ -16,6 +16,29 @@
   const Geo = global.Geo;
   const HFOV = 70;   // 水平視野角 (deg)
   const VFOV = 100;  // 垂直視野角 (deg)
+  // 可抬頭/低頭的範圍。上限必須到 90°（天頂）——星座常在 60° 以上
+  // （獵戶座可到 70 幾度），上限訂在 60° 的話手機根本轉不過去。
+  const PITCH_MAX = 90, PITCH_MIN = -60;
+  const clampPitch = (p) => Math.max(PITCH_MIN, Math.min(PITCH_MAX, p));
+
+  /**
+   * 估算一段文字畫出來的寬度（px）。用來判斷 AR 標籤會不會互相疊到。
+   * 中日韓字元約一個字高，其餘（英數、符號、空白）約半個字高。
+   */
+  function textWidth(text, fontPx) {
+    let w = 0;
+    for (const ch of String(text || '')) {
+      w += /[ᄀ-ᇿ⺀-鿿가-힯豈-﫿︰-﹏＀-｠]/.test(ch)
+        ? fontPx : fontPx * 0.55;
+    }
+    return w;
+  }
+
+  /** 提示訊息。有 ui.js 就用浮動提示，沒有才退回 alert。 */
+  function notify(msg, kind, ms) {
+    if (global.UI && global.UI.toast) global.UI.toast(msg, kind, ms);
+    else alert(msg);
+  }
 
   /**
    * 稜線顏色：依距離由近到遠，暖褐 → 藍灰。
@@ -87,7 +110,7 @@
         if (this.usingSensor) return;
         const w = this.root.clientWidth, hgt = this.root.clientHeight;
         this.heading = (drag.h - ((x - drag.x) / w) * HFOV + 360) % 360;
-        this.pitch = Math.max(-40, Math.min(60, drag.p + ((y - drag.y) / hgt) * VFOV));
+        this.pitch = clampPitch(drag.p + ((y - drag.y) / hgt) * VFOV);
         this._paint();
       };
       const up = (x, y) => {
@@ -117,8 +140,16 @@
       };
       this.$camBtn = this.root.querySelector('[data-act="camera"]');
       this.$camBtn.onclick = () => this.toggleCamera();
-      this.root.querySelector('[data-act="full"]').onclick = () => this.toggleFullscreen();
-      document.addEventListener('fullscreenchange', () => setTimeout(() => this._paint(), 100));
+      this.$fullBtn = this.root.querySelector('[data-act="full"]');
+      this.$fullBtn.onclick = () => this.toggleFullscreen();
+      document.addEventListener('fullscreenchange', () => {
+        this._syncControlState();
+        setTimeout(() => this._paint(), 100);
+      });
+      // 偽全螢幕沒有原生的 Esc 行為，自己補一個
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.root.classList.contains('ar-pseudo-full')) this._setPseudoFull(false);
+      });
       // 尺寸/方向改變時重繪，避免殘留壞掉的版面
       window.addEventListener('resize', () => this._paint());
       window.addEventListener('orientationchange', () => { setTimeout(() => this._paint(), 250); });
@@ -162,13 +193,42 @@
       return val;
     }
 
+    /**
+     * 全螢幕。iPhone Safari 沒有「元素」全螢幕 API（只有 video 能全螢幕），
+     * 原本的寫法會被 `|| function(){}` 靜靜吞掉，按了完全沒反應。
+     * 這裡在沒有原生 API（或呼叫被拒）時退回 CSS 偽全螢幕。
+     */
     toggleFullscreen() {
       const el = this.root;
-      if (!document.fullscreenElement) {
-        (el.requestFullscreen || el.webkitRequestFullscreen || function () {}).call(el);
-      } else {
+      const inNative = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      if (inNative) {
         (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
+        return;
       }
+      if (el.classList.contains('ar-pseudo-full')) { this._setPseudoFull(false); return; }
+
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (!req) { this._setPseudoFull(true); return; }
+      try {
+        const r = req.call(el);
+        if (r && typeof r.catch === 'function') r.catch(() => this._setPseudoFull(true));
+      } catch (_) {
+        this._setPseudoFull(true);
+      }
+    }
+
+    _setPseudoFull(on) {
+      this.root.classList.toggle('ar-pseudo-full', on);
+      document.body.classList.toggle('ar-full-active', on);
+      this._syncControlState();
+      // 尺寸整個變了，等版面套用後再重繪
+      setTimeout(() => this._paint(), 60);
+    }
+
+    /** 目前是否在全螢幕（原生或偽全螢幕皆算） */
+    get isFullscreen() {
+      return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+        this.root.classList.contains('ar-pseudo-full'));
     }
 
     async enableSensor() {
@@ -177,18 +237,21 @@
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
           const p = await DeviceOrientationEvent.requestPermission();
-          if (p !== 'granted') return alert('未授權方向感測器');
+          if (p !== 'granted') return notify('未授權方向感測器。請到 設定 → Safari → 動作與方向存取 開啟後重試。', 'warn');
         }
         // 兩種事件都要聽（iOS 只有 deviceorientation + webkitCompassHeading，
         // Android 多半是 deviceorientationabsolute），但只採用其中一種來源：
         // 絕對方位一旦到過就不再理會相對方位，否則兩邊互相覆蓋會左右跳動。
+        // 只有在絕對方位「真的算得出方位角」時才切換到它。有些裝置會送出
+        // alpha 為 null 的空事件，若無條件認定它可用，相對方位會被永久擋掉
+        // ——羅盤就會完全不動。
         this._absSeen = false;
-        this._onAbs = (e) => { this._absSeen = true; this._onOrient(e); };
+        this._onAbs = (e) => { if (this._onOrient(e)) this._absSeen = true; };
         this._onRel = (e) => { if (!this._absSeen) this._onOrient(e); };
         window.addEventListener('deviceorientationabsolute', this._onAbs, true);
         window.addEventListener('deviceorientation', this._onRel, true);
         this.usingSensor = true;
-      } catch (err) { alert('此裝置不支援方向感測器'); }
+      } catch (err) { notify('此裝置不支援方向感測器', 'warn'); }
     }
 
     /** 關閉羅盤，回到拖曳操作 */
@@ -200,11 +263,12 @@
       this._paint();
     }
 
+    /** @returns {boolean} 這個事件是否真的提供了可用的方位角 */
     _onOrient(e) {
       // webkitCompassHeading（iOS）或 alpha（其他）
-      let hd = (typeof e.webkitCompassHeading === 'number')
+      let hd = (typeof e.webkitCompassHeading === 'number' && isFinite(e.webkitCompassHeading))
         ? e.webkitCompassHeading
-        : (e.alpha != null ? 360 - e.alpha : null);
+        : (e.alpha != null && isFinite(e.alpha) ? 360 - e.alpha : null);
       // 圓周低通濾波，減少羅盤抖動（以 sin/cos 分量平滑角度）
       const A = 0.25;
       if (hd != null) {
@@ -214,11 +278,12 @@
         const c = A * Math.cos(rad) + (1 - A) * Math.cos(prev);
         this.heading = (Geo.toDeg(Math.atan2(s, c)) + 360) % 360;
       }
-      if (e.beta != null) {
-        const target = Math.max(-40, Math.min(60, e.beta - 90));
+      if (e.beta != null && isFinite(e.beta)) {
+        const target = clampPitch(e.beta - 90);
         this.pitch = A * target + (1 - A) * this.pitch; // 俯仰角低通
       }
       this._paint();
+      return hd != null;
     }
 
     /** 關閉相機並復原背景。開啟失敗時也走這裡收尾，避免卡在半開狀態。 */
@@ -270,7 +335,7 @@
             : (location.protocol !== 'https:'
                 ? '相機需要 HTTPS。請用 https 的網址開啟。'
                 : '無法開啟相機：' + (err && err.message ? err.message : err));
-        alert(msg);
+        notify(msg, 'warn', 5000);
       } finally {
         this._camBusy = false;
       }
@@ -285,6 +350,11 @@
       if (this.$camBtn) {
         this.$camBtn.classList.toggle('on', !!this.camOn);
         this.$camBtn.textContent = this.camOn ? '📷 相機開' : '📷 相機';
+      }
+      if (this.$fullBtn) {
+        const f = this.isFullscreen;
+        this.$fullBtn.classList.toggle('on', f);
+        this.$fullBtn.textContent = f ? '✕ 離開全螢幕' : '⛶ 全螢幕';
       }
     }
 
@@ -306,7 +376,7 @@
     lookAt(bearingDeg, pitchDeg) {
       if (this.usingSensor) return;
       this.heading = (bearingDeg + 360) % 360;
-      if (typeof pitchDeg === 'number') this.pitch = Math.max(-40, Math.min(60, pitchDeg));
+      if (typeof pitchDeg === 'number') this.pitch = clampPitch(pitchDeg);
       this._paint();
     }
 
@@ -431,25 +501,42 @@
         });
       }
 
-      // 2) 去重疊：依優先權放置，水平與垂直都接近才視為重疊
+      // 2) 去重疊
+      // 用「估算出來的標籤實際寬度」判斷，而不是固定的像素門檻——固定門檻是照
+      // 桌面寬度調的，在手機上會讓一堆名字疊在一起。
+      // 另外要用「夾到畫面內之後」的 x 來判斷：擠在邊緣的標籤會被夾到同一個
+      // 位置，用夾擠前的座標判斷就看不出它們其實重疊了。
+      const EDGE = 52;
+      const clampX = (x) => Math.max(EDGE, Math.min(W - EDGE, x));
+      cand.forEach((c) => {
+        c.xl = clampX(c.x);
+        c.w = Math.max(textWidth(c.name, 14), textWidth(c.sub, 10)) + 8;
+      });
       const placed = [];
       cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
-        if (!c.selected && placed.some((p) => Math.abs(p.x - c.x) < 62 && Math.abs(p.y - c.y) < 26)) return;
+        const hit = placed.some((p) =>
+          Math.abs(p.xl - c.xl) < (p.w + c.w) / 2 && Math.abs(p.y - c.y) < 30);
+        if (!c.selected && hit) return;
         placed.push(c);
         if (c.selected) aim = c;
       });
 
       // 3) 依 x 由左到右輸出
+      // 標籤本體夾在畫面內（否則邊緣的名稱會被切掉或被迫換行），
+      // 但引線仍畫在真正的方位上，指的還是同一座山。
       const html = placed.slice().sort((a, b) => a.x - b.x).map((c) => {
         const cls = `arlbl arlbl-${c.kind}${c.selected ? ' arlbl-sel' : ''}${c.status ? ' arlbl-' + c.status : ''}${c.custom ? ' arlbl-custom' : ''}`;
+        const xl = c.xl;
         // 引線拉到該方位的稜線上（沒有輪廓資料時退回地平線）
         const foot = c.stickTo != null ? c.stickTo : horizonY;
+        const dx = (c.x - xl).toFixed(1);
         const stick = c.stick
-          ? `<i class="arlbl-stick" style="height:${Math.max(8, foot - c.y)}px;background:${c.gcolor || 'rgba(255,255,255,.55)'}"></i>`
+          ? `<i class="arlbl-stick" style="height:${Math.max(8, foot - c.y)}px;` +
+            `left:calc(50% + ${dx}px);background:${c.gcolor || 'rgba(255,255,255,.55)'}"></i>`
           : '';
         // 群組色點：站臺的「通/繞/擋」用名稱顏色表示，群組則用這個色點區分
         const dot = c.gcolor ? `<i class="arlbl-dot" style="background:${c.gcolor}"></i>` : '';
-        return `<div class="${cls}" style="left:${c.x}px;top:${c.y}px" data-id="${c.id}">` +
+        return `<div class="${cls}" style="left:${xl}px;top:${c.y}px" data-id="${c.id}">` +
           `<span class="arlbl-name">${dot}${c.name}</span><span class="arlbl-sub">${c.sub}</span>${stick}</div>`;
       });
 

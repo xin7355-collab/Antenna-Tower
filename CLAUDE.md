@@ -14,7 +14,7 @@ node test/geo.test.js         # 執行單元測試（無相依）
 - `js/geo.js` 地理/RF 數學（含 targetTopAlt 目標有效高度）
 - `js/elevation.js` 高程/遮蔽/繞射/涵蓋/天際線輪廓
 - `js/parse.js` 匯入解析（JSON/CSV/GPX + 萬用座標）
-- `js/sky.js` 天文/星座/衛星　·　`js/groups.js` 地點群組
+- `js/sky.js` 天文/星座/衛星　·　`js/groups.js` 地點群組　·　`js/ui.js` 對話框/提示
 - `js/map.js` 地圖　·　`js/ar.js` AR 視角　·　`js/app.js` 主控
 - 數學或解析邏輯有變動時，請同步更新並執行 `test/geo.test.js`。
 
@@ -24,6 +24,17 @@ node test/geo.test.js         # 執行單元測試（無相依）
 - 群組一律透過 `Groups.colorOf()` / `Groups.groupIdOf()` 取用，勿自行判斷顏色。
 - 新增實體型別時，`app.js` 的 `allTargets()`、`ar.js` 的陸地目標清單、
   `map.js` 的 `render()` 三處都要同步。
+
+## 手機優先
+- 一律用 `UI.ask/confirm/alert/toast`，**不要用瀏覽器內建的
+  `alert`/`confirm`/`prompt`** —— 本 App 會以「加入主畫面」的獨立模式執行，
+  iOS 在該模式下對內建對話框的支援不可靠。
+- AR 仰角上下限為 `PITCH_MIN/PITCH_MAX`（-60°～90°）。上限必須含天頂，
+  星座常在 60° 以上，鎖太低會變成手機轉不過去。
+- 全螢幕要保留 `_setPseudoFull` 這條 CSS 後備路徑：iPhone Safari 沒有
+  元素全螢幕 API，只靠原生 API 會按了沒反應。
+- 面板可點元件在窄螢幕要 ≥40px 高、輸入框字級 ≥16px（小於 16px 時
+  iOS 會在聚焦時自動放大整頁）。
 
 ## 天際線（山體輪廓）
 - 仰角用可見光的等效地球半徑 `Elevation.K_OPTICAL`（≈1.13），
