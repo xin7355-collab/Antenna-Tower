@@ -32,6 +32,7 @@
       showConstellations: true, // 星座連線（北斗七星等）
       hiddenGroups: [], // 被隱藏的群組 id
       declination: -4.5, // 磁偏角（°，東偏為正）；羅盤讀到的是磁北，台灣約 -4.5
+      sats: ['iss'],    // 追蹤中的衛星（js/sats.js 目錄 id 或 norad-XXXXX）
       hfov: 70,         // AR 水平視野角（°），開相機時可用雙指縮放校正
     },
   };
@@ -750,40 +751,117 @@
     if (!live && skyTimer) { clearInterval(skyTimer); skyTimer = null; }
   }
 
-  // 衛星（ISS）：定時抓即時位置換算方位/仰角。
-  // ISS 一天只過境幾次、一次幾分鐘，其餘時間都在地平線下 ——
-  // 所以地平線下時用連續兩筆位置推算「下次過境時間」（Sky.predictPasses），
-  // 否則打開衛星永遠只看得到「在地平線下」，像壞掉一樣。
+  // 衛星追蹤：TLE + SGP4 本地傳播（js/sats.js + vendor/satellite）。
+  // 勾選的衛星在啟用時抓一次 TLE（快取 12 小時），之後每 5 秒在本地算
+  // 方位/仰角 —— 不管勾幾顆都不需要對每顆衛星輪詢網路。
+  // ISS 的 TLE 抓不到時退回 wheretheiss 即時 API（僅此一顆有此備援）。
   let satTimer = null, satJustOn = false;
-  let satPrev = null;        // 上一筆 ISS 位置 {lat,lng,altKm,t}
-  let satPred = null;        // { at, me:{lat,lng}, passes:[...] }
-  let satWasUp = null;       // 上一刻是否在地平線上（升起偵測用）
+  let satWasUp = {};          // id -> 上一刻是否在地平線上（升起偵測）
+  let satPassCache = {};      // id -> { at, me:{lat,lng}, pass }
+  let satPrev = null, satPred = null, satFallbackBusy = false;   // ISS 備援用
 
+  function selectedSatIds() {
+    const ids = (state.settings.sats && state.settings.sats.length) ? state.settings.sats : ['iss'];
+    return global.Sats ? ids.filter((id) => Sats.entryOf(id)) : ['iss'];
+  }
+
+  const passHHMM = (t) => new Date(t).toTimeString().slice(0, 5);
+  function passRel(start, now) {
+    const mins = Math.round((start - now) / 60000);
+    return mins <= 1 ? '即將升起' : mins < 90 ? `約 ${mins} 分鐘後` : `約 ${(mins / 60).toFixed(1)} 小時後`;
+  }
+
+  /** 勾選衛星中最快的下一次過境（每顆快取 30 分鐘） */
+  function soonestPass(ids, now) {
+    let best = null;
+    for (const id of ids) {
+      const c = satPassCache[id];
+      const fresh = c && (now - c.at) < 30 * 60000 && c.pass && c.pass.end > now &&
+        Geo.distance(c.me, state.me) < 50000;
+      if (!fresh) {
+        satPassCache[id] = {
+          at: now, me: { lat: state.me.lat, lng: state.me.lng },
+          pass: Sats.nextPass(id, state.me, { hours: 24, minEl: 10, from: now }),
+        };
+      }
+      const p = satPassCache[id].pass;
+      if (p && p.start > now && (!best || p.start < best.pass.start)) {
+        best = { id, name: (Sats.entryOf(id) || {}).name || id, pass: p };
+      }
+    }
+    return best;
+  }
+
+  function satTick() {
+    if (!state.settings.showSat) return;
+    const ids = selectedSatIds();
+    const withTle = global.Sats ? ids.filter((id) => Sats.hasTle(id)) : [];
+    const now = Date.now();
+
+    const pos = global.Sats ? Sats.positions(withTle, state.me, new Date(now)) : [];
+    state.satellites = pos.map((p) => ({
+      id: 'sat-' + p.id, satId: p.id, name: '🛰 ' + p.short, fullName: p.name, type: 'sat',
+      az: p.az, alt: p.alt, rangeKm: p.rangeKm, subLat: p.subLat, subLng: p.subLng,
+    }));
+
+    // ISS 備援：有勾但 TLE 抓不到
+    if (ids.indexOf('iss') >= 0 && (!global.Sats || !Sats.hasTle('iss'))) fetchISSFallback();
+
+    // 升起偵測（每顆獨立）
+    state.satellites.forEach((sx) => {
+      if (sx.alt >= 0 && satWasUp[sx.satId] === false && global.UI) {
+        UI.toast(`🛰 ${sx.fullName} 升起了！`, 'ok', 5000);
+      }
+      satWasUp[sx.satId] = sx.alt >= 0;
+    });
+
+    const up = state.satellites.filter((sx) => sx.alt >= 0)
+      .sort((a, b) => b.alt - a.alt);
+    if (up.length) {
+      const best = up[0];
+      const names = up.map((sx) => `${sx.fullName || sx.name} 仰角${Math.round(sx.alt)}°`).join('、');
+      setSkyHint(`🛰 地平線上：${names}｜往 方位 ${Math.round(best.az)}° ${Geo.compass8(best.az)} 看`);
+      if (satJustOn) { showARTab(); if (arView) arView.lookAt(best.az, Math.max(0, best.alt)); satJustOn = false; }
+    } else if (withTle.length) {
+      const nx = soonestPass(withTle, now);
+      setSkyHint(nx
+        ? `🛰 勾選的 ${withTle.length} 顆衛星都在地平線下；最快過境：${nx.name} 約 ${passHHMM(nx.pass.start)}` +
+          `（${passRel(nx.pass.start, now)}，最高仰角 ${Math.round(nx.pass.maxEl)}°、方位 ${Math.round(nx.pass.maxAz)}° ${Geo.compass8(nx.pass.maxAz)}）`
+        : `🛰 勾選的 ${withTle.length} 顆衛星 24 小時內無仰角 10° 以上的過境`);
+      satJustOn = false;
+    }
+
+    if (mapView.setSatellites) {
+      mapView.setSatellites(state.satellites.map((sx) => ({
+        id: sx.satId, name: (sx.fullName || sx.name).replace('🛰 ', ''), lat: sx.subLat, lng: sx.subLng, alt: sx.alt,
+      })));
+    }
+    if (arView) arView.render(state);
+  }
+
+  // ---- ISS 備援（wheretheiss 即時 API + 圓軌道近似過境預測）--------------
   function nextPassText(now) {
     if (!satPred) return '';
     const upcoming = satPred.passes.filter((x) => x.end > now);
-    // 擦邊過境（最高仰角幾度）實際上看不到，優先報仰角夠高的場次
     const p = upcoming.find((x) => x.maxEl >= 10) || upcoming[0];
     if (!p) return '；未來 12 小時內無過境';
-    const hhmm = new Date(p.start).toTimeString().slice(0, 5);
-    const mins = Math.round((p.start - now) / 60000);
-    const rel = mins <= 1 ? '即將升起' : mins < 90 ? `約 ${mins} 分鐘後` : `約 ${(mins / 60).toFixed(1)} 小時後`;
-    return `；下次過境約 ${hhmm}（${rel}，最高仰角 ${Math.round(p.maxEl)}°、方位 ${Math.round(p.maxAz)}° ${Geo.compass8(p.maxAz)}）`;
+    return `；下次過境約 ${passHHMM(p.start)}（${passRel(p.start, now)}，最高仰角 ${Math.round(p.maxEl)}°、方位 ${Math.round(p.maxAz)}° ${Geo.compass8(p.maxAz)}）`;
   }
 
-  async function fetchISS() {
+  async function fetchISSFallback() {
+    if (satFallbackBusy) return;
+    satFallbackBusy = true;
     try {
       const r = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
       if (!r.ok) throw new Error('ISS API ' + r.status);
       const j = await r.json();
       const la = Sky.lookAngles(state.me, { lat: j.latitude, lng: j.longitude, altKm: j.altitude });
-      state.satellites = [{
-        id: 'iss', name: '🛰 ISS', type: 'sat',
-        az: la.az, alt: la.el, rangeKm: la.rangeKm,
-        subLat: j.latitude, subLng: j.longitude,
-      }];
+      const entry = {
+        id: 'sat-iss', satId: 'iss', name: '🛰 ISS', fullName: 'ISS 國際太空站', type: 'sat',
+        az: la.az, alt: la.el, rangeKm: la.rangeKm, subLat: j.latitude, subLng: j.longitude,
+      };
+      state.satellites = state.satellites.filter((sx) => sx.satId !== 'iss').concat([entry]);
 
-      // 維護過境預測：預測太舊、觀測點移動很遠、或上一批過境都結束了才重算
       const cur = { lat: j.latitude, lng: j.longitude, altKm: j.altitude,
         t: j.timestamp ? j.timestamp * 1000 : Date.now() };
       const now = Date.now();
@@ -791,21 +869,20 @@
         Geo.distance(satPred.me, state.me) > 50000 ||
         !satPred.passes.some((p) => p.end > now);
       if (satPrev && satPrev.t < cur.t && stale) {
-        satPred = {
-          at: now, me: { lat: state.me.lat, lng: state.me.lng },
-          passes: Sky.predictPasses(satPrev, cur, state.me, { hours: 12 }),
-        };
+        satPred = { at: now, me: { lat: state.me.lat, lng: state.me.lng },
+          passes: Sky.predictPasses(satPrev, cur, state.me, { hours: 12 }) };
       }
       satPrev = cur;
 
-      const isUp = la.el >= 0;
-      if (state.settings.showSat) {
-        if (isUp) {
+      // 只有在沒有任何 TLE 衛星接手提示時，才由備援路徑寫提示
+      const othersWithTle = global.Sats ? selectedSatIds().filter((id) => id !== 'iss' && Sats.hasTle(id)) : [];
+      if (state.settings.showSat && !othersWithTle.length) {
+        if (la.el >= 0) {
           setSkyHint(`🛰 ISS 在地平線上！往 方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}° 看（距離 ${Math.round(la.rangeKm)} km）`);
-          if (satJustOn || satWasUp === false) {
+          if (satJustOn || satWasUp.iss === false) {
             showARTab();
             if (arView) arView.lookAt(la.az, Math.max(0, la.el));
-            if (satWasUp === false && global.UI) UI.toast('🛰 ISS 升起了！AR 已轉向它', 'ok', 5000);
+            if (satWasUp.iss === false && global.UI) UI.toast('🛰 ISS 升起了！AR 已轉向它', 'ok', 5000);
             satJustOn = false;
           }
         } else {
@@ -813,27 +890,78 @@
           satJustOn = false;
         }
       }
-      satWasUp = isUp;
-      if (mapView.setSatellite) mapView.setSatellite({ lat: j.latitude, lng: j.longitude, name: '🛰 ISS', alt: la.el });
+      satWasUp.iss = la.el >= 0;
+      if (mapView.setSatellites) {
+        mapView.setSatellites(state.satellites.map((sx) => ({
+          id: sx.satId, name: (sx.fullName || sx.name).replace('🛰 ', ''), lat: sx.subLat, lng: sx.subLng, alt: sx.alt,
+        })));
+      }
     } catch (_) {
-      state.satellites = [];
-      if (state.settings.showSat) setSkyHint('🛰 無法取得 ISS 位置（網路或服務暫時擋住），稍後會自動再試');
+      if (state.settings.showSat && !state.satellites.length) {
+        setSkyHint('🛰 無法取得衛星軌道資料（網路或服務暫時擋住），稍後會自動再試');
+      }
     }
+    satFallbackBusy = false;
     if (arView) arView.render(state);
   }
-  function satTicker() {
-    // 10 秒一次已足夠（ISS 每秒約 7.6 km，方位變化不快），也省電省流量；
-    // 分頁切到背景時直接跳過，不必在使用者沒看的時候一直抓。
-    if (state.settings.showSat && !satTimer) {
-      satJustOn = true; fetchISS();
-      setTimeout(() => { if (state.settings.showSat) fetchISS(); }, 3000); // 第二筆，過境預測需要兩筆
-      satTimer = setInterval(() => { if (!document.hidden) fetchISS(); }, 10000);
+
+  async function satStart() {
+    satJustOn = true;
+    setSkyHint('🛰 取得衛星軌道資料中…');
+    if (global.Sats && Sats.available) {
+      await Sats.ensureTles(selectedSatIds(), { onStatus: () => renderSatList() });
+      renderSatList();
     }
+    satTick();
+    // 位置是本地算的，5 秒一拍很便宜；ISS 備援自己有 in-flight 防護
+    satTimer = setInterval(() => { if (!document.hidden) satTick(); }, 5000);
+  }
+
+  function satTicker() {
+    if (state.settings.showSat && !satTimer) satStart();
     if (!state.settings.showSat && satTimer) {
       clearInterval(satTimer); satTimer = null; state.satellites = [];
-      if (mapView.setSatellite) mapView.setSatellite(null);
+      if (mapView.setSatellites) mapView.setSatellites([]);
       if (arView) arView.render(state);
     }
+  }
+
+  /** 勾選清單變更（衛星開著時重新抓缺的 TLE 並立即重算） */
+  function satSelectionChanged() {
+    saveState();
+    renderSatList();
+    satPassCache = {};
+    if (state.settings.showSat && global.Sats && Sats.available) {
+      Sats.ensureTles(selectedSatIds(), { onStatus: () => renderSatList() })
+        .then(() => { renderSatList(); satTick(); });
+    }
+  }
+
+  // ---- 衛星清單 UI -------------------------------------------------------
+  function renderSatList() {
+    const el = document.getElementById('sat-list');
+    if (!el || !global.Sats) return;
+    const sel = new Set(selectedSatIds());
+    const customs = [...sel].filter((id) => /^norad-/.test(id));
+    const rows = Sats.CATALOG.concat(customs.map((id) => Sats.entryOf(id))).map((e) => {
+      const st = Sats.getStatus(e.id);
+      const tle = Sats.getTle(e.id);
+      const badge = st.state === 'loading' ? '<i class="sat-st">⏳</i>'
+        : st.state === 'error' ? '<i class="sat-st warn" title="抓不到軌道資料">✗</i>'
+        : tle ? `<i class="sat-st ok" title="軌道資料 ${Math.round((Date.now() - tle.at) / 3600000)} 小時前">✓</i>` : '';
+      return `<label class="sat-row"><input type="checkbox" data-sat="${e.id}"${sel.has(e.id) ? ' checked' : ''}>` +
+        `<span class="sat-name">${e.name}</span><b class="sat-grp">${e.group}</b>${badge}</label>`;
+    });
+    el.innerHTML = rows.join('');
+    el.querySelectorAll('input[data-sat]').forEach((inp) => {
+      inp.onchange = () => {
+        const id = inp.dataset.sat;
+        let ids = selectedSatIds().filter((x) => x !== id);
+        if (inp.checked) ids.push(id);
+        state.settings.sats = ids;
+        satSelectionChanged();
+      };
+    });
   }
 
   // ---- 設定與工具列 ------------------------------------------------------
@@ -890,9 +1018,32 @@
     document.getElementById('opt-sat').onchange = (e) => {
       state.settings.showSat = e.target.checked;
       saveState(); satTicker(); render();
-      if (e.target.checked) { showARTab(); setSkyHint('🛰 取得 ISS 位置中…（若在地平線下會顯示於地面方向）'); }
+      if (e.target.checked) { showARTab(); }
       else setSkyHint('');
     };
+    // 衛星清單
+    document.getElementById('btn-sat-tw').onclick = () => {
+      state.settings.sats = ['iss', ...Sats.TAIWAN_IDS];
+      satSelectionChanged();
+      UI.toast(`已加入台灣在軌衛星 ${Sats.TAIWAN_IDS.length} 顆（AR 只會顯示當下在地平線上的）`, 'ok', 4500);
+    };
+    document.getElementById('btn-sat-iss').onclick = () => {
+      state.settings.sats = ['iss'];
+      satSelectionChanged();
+    };
+    const satAdd = () => {
+      const inp = document.getElementById('opt-sat-norad');
+      const n = parseInt(String(inp.value).replace(/\D/g, ''), 10);
+      if (!n) { UI.toast('請輸入 NORAD 編目編號（純數字，如 25544）', 'warn'); return; }
+      const id = 'norad-' + n;
+      const ids = selectedSatIds();
+      if (ids.indexOf(id) < 0) ids.push(id);
+      state.settings.sats = ids;
+      inp.value = '';
+      satSelectionChanged();
+    };
+    document.getElementById('btn-sat-add').onclick = satAdd;
+    document.getElementById('opt-sat-norad').onkeydown = (e) => { if (e.key === 'Enter') satAdd(); };
     document.getElementById('opt-clickadds').onchange = (e) => {
       state.settings.mapClickAdds = e.target.value;
       saveState();
@@ -1146,6 +1297,7 @@
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }
     arView = new ARView('view-ar', handlers);
+    renderSatList();
     if (state.settings.hfov && state.settings.hfov !== 70) arView.setFov(state.settings.hfov);
     bindControls();
     render();

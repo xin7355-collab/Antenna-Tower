@@ -164,21 +164,34 @@
     }
 
     /**
-     * 顯示衛星（ISS）當前地表位置。傳 null 即清除。
+     * 顯示多顆衛星當前地表位置（星下點）。傳空陣列或 null 即清除。
+     * sats = [{id, name, lat, lng, alt(仰角deg)}]
      */
-    setSatellite(pos) {
-      if (this.satMarker) { this.map.removeLayer(this.satMarker); this.satMarker = null; }
-      if (!pos) return;
+    setSatellites(sats) {
+      if (!this.satMarkers) this.satMarkers = new Map();
+      const want = new Set((sats || []).map((s) => s.id));
+      for (const [id, m] of this.satMarkers) {
+        if (!want.has(id)) { this.map.removeLayer(m); this.satMarkers.delete(id); }
+      }
       const L = this.L;
-      this.satMarker = L.marker([pos.lat, pos.lng], {
-        icon: L.divIcon({
-          className: 'mk-wrap',
-          html: `<div class="mk mk-sat"><span class="mk-ico">🛰</span>` +
-                `<span class="mk-lbl">${pos.name || 'ISS'} (${pos.alt >= 0 ? '地平線上' : '地平線下'})</span></div>`,
-          iconAnchor: [0, 0],
-        }),
-        interactive: false,
-      }).addTo(this.map);
+      (sats || []).forEach((s) => {
+        const html = `<div class="mk mk-sat"><span class="mk-ico">🛰</span>` +
+          `<span class="mk-lbl">${s.name}${s.alt >= 0 ? '（地平線上）' : ''}</span></div>`;
+        const icon = L.divIcon({ className: 'mk-wrap', html, iconAnchor: [0, 0] });
+        let m = this.satMarkers.get(s.id);
+        if (!m) {
+          m = L.marker([s.lat, s.lng], { icon, interactive: false }).addTo(this.map);
+          this.satMarkers.set(s.id, m);
+        } else {
+          m.setLatLng([s.lat, s.lng]);
+          m.setIcon(icon);
+        }
+      });
+    }
+
+    /** 相容舊介面：單顆（ISS）。 */
+    setSatellite(pos) {
+      this.setSatellites(pos ? [{ id: 'iss', name: pos.name || 'ISS', lat: pos.lat, lng: pos.lng, alt: pos.alt }] : []);
     }
 
     /**

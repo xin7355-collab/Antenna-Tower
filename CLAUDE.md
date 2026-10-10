@@ -14,7 +14,8 @@ node test/geo.test.js         # 執行單元測試（無相依）
 - `js/geo.js` 地理/RF 數學（含 targetTopAlt 目標有效高度）
 - `js/elevation.js` 高程/遮蔽/繞射/涵蓋/天際線輪廓
 - `js/parse.js` 匯入解析（JSON/CSV/GPX + 萬用座標）
-- `js/sky.js` 天文/星座/衛星　·　`js/groups.js` 地點群組　·　`js/ui.js` 對話框/提示
+- `js/sky.js` 天文/星座/衛星　·　`js/sats.js` 多衛星追蹤（TLE+SGP4）
+- `js/groups.js` 地點群組　·　`js/ui.js` 對話框/提示
 - `js/map.js` 地圖　·　`js/ar.js` AR 視角　·　`js/app.js` 主控
 - 數學或解析邏輯有變動時，請同步更新並執行 `test/geo.test.js`。
 
@@ -50,8 +51,12 @@ node test/geo.test.js         # 執行單元測試（無相依）
   台灣）換算真北後才用。
 - 視野角是實例屬性 `this.hfov`（可被雙指縮放與設定改動），
   **不要再引入固定的 HFOV 常數**；垂直視野依 `VFOV_RATIO` 連動。
-- 衛星在地平線下時用 `Sky.predictPasses`（圓軌道近似、純函式、有測試）
-  報「下次過境」；它需要兩筆不同時刻的位置。
+- 衛星一律走 `js/sats.js`（TLE 快取 12h + vendor/satellite 的 SGP4 本地
+  傳播），不要對衛星位置輪詢網路；wheretheiss 只是 ISS 抓不到 TLE 時的
+  備援。`Sky.predictPasses`（圓軌道近似）只給該備援用，TLE 在手時
+  一律用 `Sats.nextPass`。
+- 衛星目錄的 NORAD 編號可能錯：抓回的名稱要跟 `match` 比對，不合就用
+  `nameQuery` 搜尋補救 —— 新增衛星時兩者都要填。
 
 ## 天際線（山體輪廓）
 - 仰角用可見光的等效地球半徑 `Elevation.K_OPTICAL`（≈1.13），

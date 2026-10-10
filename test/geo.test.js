@@ -9,7 +9,9 @@ require('../js/elevation.js');
 require('../js/parse.js');
 require('../js/sky.js');
 require('../js/groups.js');
-const { Geo, Elevation, Parse, Sky, Groups } = globalThis;
+globalThis.satellite = require('../vendor/satellite/satellite.min.js');
+require('../js/sats.js');
+const { Geo, Elevation, Parse, Sky, Groups, Sats } = globalThis;
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -400,6 +402,51 @@ async function runParseTests() {
       Parse.parseStations('{"stations":[]}', 'x.json').markers.length === 0);
     ok('GPX 回傳空標註陣列',
       Parse.parseStations('<gpx><wpt lat="24" lon="121"/></gpx>', 'x.gpx').markers.length === 0);
+  }
+
+  console.log('sats — 多衛星追蹤（TLE + SGP4）');
+  {
+    ok('SGP4 引擎已載入', Sats.available === true);
+    const ids = Sats.CATALOG.map((c) => c.id);
+    ok('目錄 10 顆（台灣 9 + ISS）', ids.length === 10 && Sats.TAIWAN_IDS.length === 9);
+    ok('目錄 id 不重複', new Set(ids).size === ids.length);
+    ok('自訂 NORAD 動態項目', (Sats.entryOf('norad-43013') || {}).norad === 43013);
+    ok('非法 id 回傳 null', Sats.entryOf('xx-123') == null && Sats.entryOf('norad-abc') == null);
+
+    const txt = 'ISS (ZARYA)\n1 25544U 98067A   24001.50000000  .00016717  00000-0  30777-3 0  9992\n' +
+      '2 25544  51.6416 339.5000 0003500  83.0000 277.0000 15.49500000430000\n' +
+      'FORMOSAT 5\n1 42920U 17049A   24001.00000000  .00000100  00000-0  10000-3 0  9999\n' +
+      '2 42920  98.2800 100.0000 0001000  90.0000 270.0000 14.55000000330000';
+    const parsed = Sats.parseTleText(txt);
+    ok('TLE 文字解析出 2 組', parsed.length === 2 && parsed[1].name === 'FORMOSAT 5');
+
+    // 注入固定 ISS TLE，於 epoch 時刻驗證位置
+    Sats._setTle('iss', 'ISS (ZARYA)',
+      '1 25544U 98067A   24001.50000000  .00016717  00000-0  30777-3 0  9992',
+      '2 25544  51.6416 339.5000 0003500  83.0000 277.0000 15.49500000430000');
+    ok('注入後 hasTle', Sats.hasTle('iss'));
+    const obs = { lat: 25.03, lng: 121.56, alt: 10 };
+    const when = new Date(Date.UTC(2024, 0, 1, 12, 0, 0));
+    const posn = Sats.positions(['iss', 'fs5'], obs, when);   // fs5 無 TLE 應被略過
+    ok('只回傳有 TLE 的衛星', posn.length === 1 && posn[0].id === 'iss');
+    const p0 = posn[0];
+    ok('軌道高度 ~420km（400–440）', p0.heightKm > 400 && p0.heightKm < 440);
+    ok('方位/仰角/距離皆為有效數值',
+      p0.az >= 0 && p0.az < 360 && p0.alt >= -90 && p0.alt <= 90 && isFinite(p0.rangeKm));
+
+    // 交叉驗證：SGP4 的視角 vs Sky.lookAngles（兩套獨立實作）
+    const la = Sky.lookAngles(obs, { lat: p0.subLat, lng: p0.subLng, altKm: p0.heightKm });
+    const dAz = Math.abs(((la.az - p0.az + 540) % 360) - 180);
+    ok('與 Sky.lookAngles 交叉驗證（方位差 <1°、仰角差 <0.5°）',
+      dAz < 1 && Math.abs(la.el - p0.alt) < 0.5);
+
+    // 過境預測：台北 24 小時內必有 ISS 過境
+    const np = Sats.nextPass('iss', obs, { hours: 24, minEl: 5, from: when.getTime() });
+    ok('24 小時內找到過境', !!np);
+    ok('過境時間順序正確', np.start <= np.maxT && np.maxT <= np.end && np.start > when.getTime() - 1);
+    ok('最大仰角 ≥ 門檻 5°', np.maxEl >= 5);
+    const durMin = (np.end - np.start) / 60000;
+    ok('過境時長合理（1–12 分鐘）', durMin >= 1 && durMin <= 12);
   }
 
   console.log(`\n結果：${pass} 通過，${fail} 失敗`);
