@@ -87,7 +87,16 @@
       if (!raw) return;
       const d = JSON.parse(raw);
       if (d.me) Object.assign(state.me, d.me);
-      if (Array.isArray(d.stations)) state.stations = d.stations;
+      if (Array.isArray(d.stations)) {
+        state.stations = d.stations;
+        // 群組功能加入前存下的站臺沒有 group 欄位，會全部掉進「自訂站臺」。
+        // 內建範例站臺（id 對得上）補回原本的地區群組。
+        const sample = new Map(S.stations.map((x) => [x.id, x]));
+        state.stations.forEach((st) => {
+          const src = sample.get(st.id);
+          if (src && (st.group == null || st.group === '')) st.group = src.group;
+        });
+      }
       if (Array.isArray(d.markers)) state.markers = d.markers;
       if (d.settings) Object.assign(state.settings, d.settings);
       // 只有在「還站在同一個地方」時才沿用舊輪廓；移動超過 300m 就作廢
@@ -423,6 +432,7 @@
     } else if (aimEl) {
       aimEl.innerHTML = '';
     }
+    if (mapView.setTargetLine) mapView.setTargetLine(target && target.type !== 'me' ? state.me : null, target);
     render();
     if (!target || target.type === 'me') return;
 
@@ -658,18 +668,17 @@
         `<small>${sub}</small></span></li>`;
     };
 
-    if (!global.Groups) {
-      listEl.innerHTML = visible.slice().sort(sortInGroup).map(rowHtml).join('');
-    } else {
-      listEl.innerHTML = Groups.partition(visible).map(({ group, items }) =>
+    const listHtml = !global.Groups
+      ? visible.slice().sort(sortInGroup).map(rowHtml).join('')
+      : Groups.partition(visible).map(({ group, items }) =>
         `<li class="tgt-group"><i style="background:${group.color}"></i>${group.name}` +
         `<b>${items.length}</b></li>` +
         items.slice().sort(sortInGroup).map(rowHtml).join('')
       ).join('');
-    }
-    listEl.querySelectorAll('.tgt').forEach((el) => {
-      el.onclick = () => select(el.dataset.id);
-    });
+    // 內容沒變就不重建：手指按著某一列時若整份清單被換新，
+    // 那一列的觸控事件會落在已脫離畫面的元素上，點選就失效了。
+    if (listEl._html !== listHtml) { listEl.innerHTML = listHtml; listEl._html = listHtml; }
+
 
     document.getElementById('me-coord').textContent =
       `${state.me.lat.toFixed(4)}, ${state.me.lng.toFixed(4)} · 海拔 ${state.me.alt}m · 天線 ${state.me.antenna}m`;
@@ -802,6 +811,7 @@
     state.satellites = pos.map((p) => ({
       id: 'sat-' + p.id, satId: p.id, name: '🛰 ' + p.short, fullName: p.name, type: 'sat',
       az: p.az, alt: p.alt, rangeKm: p.rangeKm, subLat: p.subLat, subLng: p.subLng,
+      orbit: p.orbit, sunlit: p.sunlit, nakedEye: p.nakedEye,
     }));
 
     // ISS 備援：有勾但 TLE 抓不到
@@ -809,27 +819,38 @@
 
     // 升起偵測（每顆獨立）
     state.satellites.forEach((sx) => {
-      if (sx.alt >= 0 && satWasUp[sx.satId] === false && global.UI) {
+      if (sx.orbit !== 'GEO' && sx.alt >= 0 && satWasUp[sx.satId] === false && global.UI) {
         UI.toast(`🛰 ${sx.fullName} 升起了！`, 'ok', 5000);
       }
       satWasUp[sx.satId] = sx.alt >= 0;
     });
 
-    const up = state.satellites.filter((sx) => sx.alt >= 0)
+    const geo = state.satellites.filter((sx) => sx.orbit === 'GEO');
+    const leoUp = state.satellites.filter((sx) => sx.orbit !== 'GEO' && sx.alt >= 0)
       .sort((a, b) => b.alt - a.alt);
-    if (up.length) {
-      const best = up[0];
-      const names = up.map((sx) => `${sx.fullName || sx.name} 仰角${Math.round(sx.alt)}°`).join('、');
-      setSkyHint(`🛰 地平線上：${names}｜往 方位 ${Math.round(best.az)}° ${Geo.compass8(best.az)} 看`);
-      if (satJustOn) { showARTab(); if (arView) arView.lookAt(best.az, Math.max(0, best.alt)); satJustOn = false; }
-    } else if (withTle.length) {
-      const nx = soonestPass(withTle, now);
-      setSkyHint(nx
-        ? `🛰 勾選的 ${withTle.length} 顆衛星都在地平線下；最快過境：${nx.name} 約 ${passHHMM(nx.pass.start)}` +
-          `（${passRel(nx.pass.start, now)}，最高仰角 ${Math.round(nx.pass.maxEl)}°、方位 ${Math.round(nx.pass.maxAz)}° ${Geo.compass8(nx.pass.maxAz)}）`
-        : `🛰 勾選的 ${withTle.length} 顆衛星 24 小時內無仰角 10° 以上的過境`);
-      satJustOn = false;
+    const geoUp = geo.filter((sx) => sx.alt >= 0);
+    const leoIds = withTle.filter((id) => !state.satellites.some((sx) => sx.satId === id && sx.orbit === 'GEO'));
+    const parts = [];
+    if (leoUp.length) {
+      parts.push('🛰 低軌在地平線上：' + leoUp.map((sx) =>
+        `${sx.fullName} 仰角${Math.round(sx.alt)}° ${Geo.compass8(sx.az)}` +
+        (sx.nakedEye ? '（✨肉眼可見）' : sx.sunlit === false ? '（地影中，肉眼看不到）' : '')).join('、'));
+    } else if (leoIds.length) {
+      const nx = soonestPass(leoIds, now);
+      parts.push(nx
+        ? `🛰 低軌 ${leoIds.length} 顆都在地平線下；最快過境：${nx.name} 約 ${passHHMM(nx.pass.start)}` +
+          `（${passRel(nx.pass.start, now)}，最高仰角 ${Math.round(nx.pass.maxEl)}°、方位 ${Math.round(nx.pass.maxAz)}° ${Geo.compass8(nx.pass.maxAz)}` +
+          (nx.pass.visible ? '，✨肉眼可見' : nx.pass.sunlit === false ? '，屆時在地影中、肉眼看不到' : nx.pass.dark === false ? '，屆時天還亮、肉眼看不到' : '') + '）'
+        : `🛰 低軌 ${leoIds.length} 顆 24 小時內無仰角 10° 以上的過境`);
     }
+    if (geoUp.length) {
+      parts.push('📡 同步衛星（固定不動）：' + geoUp.map((sx) =>
+        `${sx.fullName} 方位${Math.round(sx.az)}° ${Geo.compass8(sx.az)}、仰角${Math.round(sx.alt)}°`).join('、'));
+    }
+    if (parts.length) setSkyHint(parts.join('　'));
+    const best = leoUp[0] || geoUp[0];
+    if (satJustOn && best) { showARTab(); if (arView) arView.lookAt(best.az, Math.max(0, best.alt)); }
+    satJustOn = false;
 
     if (mapView.setSatellites) {
       mapView.setSatellites(state.satellites.map((sx) => ({
@@ -1027,6 +1048,13 @@
       satSelectionChanged();
       UI.toast(`已加入台灣在軌衛星 ${Sats.TAIWAN_IDS.length} 顆（AR 只會顯示當下在地平線上的）`, 'ok', 4500);
     };
+    document.getElementById('btn-sat-geo').onclick = () => {
+      const ids = selectedSatIds();
+      Sats.GEO_IDS.forEach((id) => { if (ids.indexOf(id) < 0) ids.push(id); });
+      state.settings.sats = ids;
+      satSelectionChanged();
+      UI.toast('已加入同步衛星（ST-2、向日葵9號、Inmarsat）：固定在天空同一位置，24 小時都看得到方向', 'ok', 5000);
+    };
     document.getElementById('btn-sat-iss').onclick = () => {
       state.settings.sats = ['iss'];
       satSelectionChanged();
@@ -1133,6 +1161,13 @@
     };
 
     document.getElementById('btn-analyze-all').onclick = () => analyzeAll();
+
+    // 清單點選：委派到外層、用 touchend 直接觸發（iOS 獨立模式的合成 click 不可靠）
+    const tgtOf = (e) => (e.target && e.target.closest ? e.target.closest('.tgt') : null);
+    UI.bindTap(document.getElementById('target-list'), (e) => {
+      const li = tgtOf(e);
+      if (li && li.dataset.id) select(li.dataset.id);
+    }, (e) => !!tgtOf(e));
 
     // 萬用座標：貼上任何格式套用到我的位置（立即反應，高程在背景補上）
     const applyPaste = () => {
@@ -1254,6 +1289,21 @@
   // ---- 地圖回呼 ----------------------------------------------------------
   const handlers = {
     onSelect: (id) => select(id),
+    // 羅盤方位 → 地圖（我的位置扇形、方向跟隨旋轉）
+    onHeading: (h) => { if (mapView.setHeading) mapView.setHeading(h); },
+    onSensorOff: () => { if (mapView.setFollow) mapView.setFollow(false); },
+    // 地圖上的指北針：北朝上 ⇄ 方向跟隨（需要羅盤，沒開就順便開）
+    onCompassTap: async () => {
+      if (mapView.follow) { mapView.setFollow(false); UI.toast('北朝上', '', 1800); return; }
+      if (!arView.usingSensor) {
+        await arView.enableSensor();
+        arView._syncControlState();
+        if (!arView.usingSensor) return;   // 權限被拒，enableSensor 已提示原因
+      }
+      mapView.setFollow(true);
+      UI.toast('🧭 方向跟隨：地圖隨手機朝向旋轉（拖動地圖可離開）', 'ok', 3200);
+    },
+    onFollowExit: () => UI.toast('已離開方向跟隨，回到北朝上', '', 2200),
     onFov: (v) => {
       state.settings.hfov = Math.round(v);
       saveState();
@@ -1292,7 +1342,9 @@
         throw new Error('Leaflet 未載入');
       }
     } catch (err) {
-      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, setSatellite() {}, focus() {}, onShown() {}, map: { invalidateSize() {} } };
+      mapView = { render() {}, drawPath() {}, clearPath() {}, setCoverage() {}, setViewshed() {}, setSatellite() {},
+        setSatellites() {}, setHeading() {}, setFollow() {}, setTargetLine() {}, follow: false,
+        focus() {}, onShown() {}, map: { invalidateSize() {} } };
       const el = document.getElementById('map');
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }

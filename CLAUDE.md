@@ -58,6 +58,22 @@ node test/geo.test.js         # 執行單元測試（無相依）
 - 衛星目錄的 NORAD 編號可能錯：抓回的名稱要跟 `match` 比對，不合就用
   `nameQuery` 搜尋補救 —— 新增衛星時兩者都要填。
 
+## 高程資料
+- 主要來源是 DEM 地形圖磚（`Elevation.demElevations`，AWS Terrarium），
+  open-meteo 只是備援 —— 後者有速率限制，手機共用 IP 很容易 429。
+- 圖磚 PNG 一律用 `decodeTerrariumPng`（DecompressionStream）自己解，
+  **不要改用 canvas getImageData**：Safari 反指紋會加雜訊，R 通道錯 1 = 256m。
+- 單元測試裡 open-meteo 的 mock 測試要先 `Elevation.setDemEnabled(false)`
+  （Node 22 也有 DecompressionStream，否則會先去打圖磚）。
+
+## AR 點選與地圖旋轉
+- AR 標籤 `pointer-events: none`，點擊一律由 `ARView._tap` 用座標判定。
+  開羅盤時每幀重建標籤，事件綁在標籤上會落到已脫離 DOM 的元素而失效。
+- 清單、地圖 marker 等「會重繪的元素」：內容沒變就不要重建 DOM / setIcon。
+- 地圖方向跟隨是自製的（放大容器 + CSS 旋轉）。**不要引入 leaflet-rotate**：
+  它是 GPL-3.0，會讓整個 App 受 GPL 約束。
+- AR 標籤字體不要用 `-webkit-text-stroke`（中文會描成鏤空鋸齒），用膠囊底色。
+
 ## 天際線（山體輪廓）
 - 仰角用可見光的等效地球半徑 `Elevation.K_OPTICAL`（≈1.13），
   不是無線電的 4/3 —— AR 疊在相機畫面上才對得準。

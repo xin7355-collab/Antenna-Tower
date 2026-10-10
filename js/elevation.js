@@ -20,6 +20,177 @@
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // ---- DEM 地形圖磚（主要高程來源）---------------------------------------
+  // AWS Open Data 的 Terrarium 地形圖磚：靜態 PNG、無速率限制、CORS 開放。
+  // 每張 256×256 像素，像素值編碼海拔：h = R*256 + G + B/256 − 32768。
+  // 一次抓十幾張圖磚就能在本地取樣上千點，取代 open-meteo 的逐點查詢
+  // （那是 429 的根源）。open-meteo 降為圖磚抓不到時的備援。
+  //
+  // 為什麼自己解 PNG 而不畫到 canvas 再讀像素：Safari 的反指紋保護會在
+  // canvas 讀回的像素加雜訊，R 通道差 1 就是 256 公尺的誤差。直接用
+  // DecompressionStream 解 zlib，拿到的是原始位元組，不受影響。
+  const DEM_URL = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+  const demTiles = new Map();          // "z/x/y" -> Promise<{w,h,data:Float32Array}>
+  const DEM_TILE_CAP = 80;             // 記憶體中最多保留幾張（每張 256KB）
+  let demEnabled = true;
+
+  function demSupported() {
+    return demEnabled && typeof fetch === 'function' && typeof DecompressionStream === 'function' &&
+      typeof Response === 'function' && typeof Blob === 'function';
+  }
+  function setDemEnabled(on) { demEnabled = !!on; }
+
+  /** Terrarium 像素 → 海拔 (m) */
+  function decodeTerrarium(r, g, b) { return r * 256 + g + b / 256 - 32768; }
+
+  /** 經緯度 → 指定縮放層級的「分數」圖磚座標（Web Mercator） */
+  function tileCoord(lat, lng, z) {
+    const n = Math.pow(2, z);
+    const la = Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180;
+    return {
+      x: (lng + 180) / 360 * n,
+      y: (1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2 * n,
+    };
+  }
+
+  /** 選一個縮放層級：在「用到的圖磚數 ≤ maxTiles」的前提下取最清晰的 */
+  function pickZoom(points, opts = {}) {
+    const { maxTiles = 16, zMin = 8, zMax = 12 } = opts;
+    for (let z = zMax; z >= zMin; z--) {
+      const set = new Set();
+      for (const p of points) {
+        const t = tileCoord(p.lat, p.lng, z);
+        set.add(Math.floor(t.x) + '/' + Math.floor(t.y));
+        if (set.size > maxTiles) break;
+      }
+      if (set.size <= maxTiles) return z;
+    }
+    return zMin;
+  }
+
+  async function inflateZlib(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  /**
+   * 解 Terrarium PNG（8-bit RGB/RGBA、非交錯）→ 海拔陣列。
+   * 只實作圖磚需要的子集；其他格式直接拋出，由呼叫端退回備援來源。
+   */
+  async function decodeTerrariumPng(buf) {
+    const d = new Uint8Array(buf);
+    const SIG = [137, 80, 78, 71, 13, 10, 26, 10];
+    for (let i = 0; i < 8; i++) if (d[i] !== SIG[i]) throw new Error('不是 PNG');
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    let pos = 8, w = 0, h = 0, bpp = 0;
+    const parts = [];
+    let total = 0;
+    while (pos + 8 <= d.length) {
+      const len = dv.getUint32(pos);
+      const type = String.fromCharCode(d[pos + 4], d[pos + 5], d[pos + 6], d[pos + 7]);
+      if (type === 'IHDR') {
+        w = dv.getUint32(pos + 8); h = dv.getUint32(pos + 12);
+        const depth = d[pos + 16], ct = d[pos + 17], il = d[pos + 20];
+        if (depth !== 8 || (ct !== 2 && ct !== 6) || il !== 0) throw new Error('不支援的 PNG 格式');
+        bpp = ct === 2 ? 3 : 4;
+      } else if (type === 'IDAT') {
+        parts.push(d.subarray(pos + 8, pos + 8 + len)); total += len;
+      } else if (type === 'IEND') break;
+      pos += 12 + len;
+    }
+    if (!w || !h || !parts.length) throw new Error('PNG 缺少影像資料');
+    const z = new Uint8Array(total);
+    let o = 0;
+    for (const p of parts) { z.set(p, o); o += p.length; }
+    const raw = await inflateZlib(z);
+
+    const stride = w * bpp;
+    const data = new Float32Array(w * h);
+    let prev = new Uint8Array(stride), i = 0;
+    for (let y = 0; y < h; y++) {
+      const f = raw[i++];
+      const line = raw.subarray(i, i + stride);
+      i += stride;
+      // PNG 逐列反濾波（None/Sub/Up/Average/Paeth）
+      for (let x = 0; x < stride; x++) {
+        const a = x >= bpp ? line[x - bpp] : 0, b = prev[x], c = x >= bpp ? prev[x - bpp] : 0;
+        let v = line[x];
+        if (f === 1) v += a;
+        else if (f === 2) v += b;
+        else if (f === 3) v += (a + b) >> 1;
+        else if (f === 4) {
+          const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
+          v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+        }
+        line[x] = v & 255;
+      }
+      for (let x = 0; x < w; x++) {
+        data[y * w + x] = decodeTerrarium(line[x * bpp], line[x * bpp + 1], line[x * bpp + 2]);
+      }
+      prev = line;
+    }
+    return { w, h, data };
+  }
+
+  function loadDemTile(z, x, y) {
+    const key = z + '/' + x + '/' + y;
+    let p = demTiles.get(key);
+    if (p) { demTiles.delete(key); demTiles.set(key, p); return p; }   // LRU：移到最新
+    p = (async () => {
+      const res = await fetch(DEM_URL(z, x, y));
+      if (!res.ok) throw new Error('DEM ' + res.status);
+      return decodeTerrariumPng(await res.arrayBuffer());
+    })();
+    p.catch(() => demTiles.delete(key));   // 失敗的不要留著，下次可重試
+    demTiles.set(key, p);
+    while (demTiles.size > DEM_TILE_CAP) demTiles.delete(demTiles.keys().next().value);
+    return p;
+  }
+
+  /** 圖磚內雙線性內插（以像素中心為取樣點；邊緣夾在圖磚內） */
+  function sampleTile(t, px, py) {
+    const x = Math.max(0, Math.min(t.w - 1, px - 0.5));
+    const y = Math.max(0, Math.min(t.h - 1, py - 0.5));
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(t.w - 1, x0 + 1), y1 = Math.min(t.h - 1, y0 + 1);
+    const dx = x - x0, dy = y - y0, W = t.w, D = t.data;
+    return D[y0 * W + x0] * (1 - dx) * (1 - dy) + D[y0 * W + x1] * dx * (1 - dy) +
+      D[y1 * W + x0] * (1 - dx) * dy + D[y1 * W + x1] * dx * dy;
+  }
+
+  /**
+   * 用 DEM 圖磚查多點海拔。抓不到的圖磚，其上的點回傳 null。
+   * 海面以下（海底地形）一律視為 0 —— 視線看到的是海面。
+   */
+  async function demElevations(points, opts = {}) {
+    const z = opts.zoom || pickZoom(points, opts);
+    const groups = new Map();
+    points.forEach((p, i) => {
+      const t = tileCoord(p.lat, p.lng, z);
+      const tx = Math.floor(t.x), ty = Math.floor(t.y);
+      const key = tx + '/' + ty;
+      if (!groups.has(key)) groups.set(key, { tx, ty, pts: [] });
+      groups.get(key).pts.push({ i, px: (t.x - tx) * 256, py: (t.y - ty) * 256 });
+    });
+    const out = new Array(points.length).fill(null);
+    const jobs = [...groups.values()];
+    let done = 0, next = 0;
+    const worker = async () => {
+      while (next < jobs.length) {
+        const g = jobs[next++];
+        try {
+          const tile = await loadDemTile(z, g.tx, g.ty);
+          const sx = tile.w / 256, sy = tile.h / 256;
+          g.pts.forEach((q) => { out[q.i] = Math.max(0, sampleTile(tile, q.px * sx, q.py * sy)); });
+        } catch (_) { /* 這張抓不到：那些點留 null，交給備援 */ }
+        done++;
+        if (opts.onTile) opts.onTile(done, jobs.length);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, jobs.length) }, worker));
+    return out;
+  }
+
   // Open-Meteo 是免費共用服務，短時間內連續丟幾十個請求會被回 429。
   // 這裡自己節流（請求之間留間隔）並在被限流時退避重試。
   const MIN_GAP_MS = 130;
@@ -62,7 +233,7 @@
    */
   async function fetchElevations(points, opts = {}) {
     const out = new Array(points.length).fill(null);
-    const need = [];
+    let need = [];
     points.forEach((p, i) => {
       const k = keyOf(p);
       if (cache.has(k)) out[i] = cache.get(k);
@@ -71,6 +242,27 @@
     const CHUNK = 100;
     const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
     if (onProgress) onProgress(points.length - need.length, points.length);
+
+    // 1) DEM 圖磚（主要來源）
+    if (need.length && demSupported() && opts.dem !== false) {
+      const base = points.length - need.length;
+      try {
+        const vals = await demElevations(need.map((x) => x.p), {
+          maxTiles: opts.maxTiles, zMax: opts.zMax, zMin: opts.zMin,
+          onTile: onProgress ? (d, n) => onProgress(base + Math.round((need.length * d) / n), points.length) : null,
+        });
+        need = need.filter((x, j) => {
+          const v = vals[j];
+          if (v == null || !isFinite(v)) return true;
+          cache.set(x.k, v);
+          out[x.i] = v;
+          return false;
+        });
+      } catch (_) { /* 整批失敗就全部交給備援 */ }
+      if (!need.length) return out;
+    }
+
+    // 2) open-meteo（備援）
     let failed = 0;
     for (let s = 0; s < need.length; s += CHUNK) {
       const slice = need.slice(s, s + CHUNK);
@@ -379,10 +571,24 @@
     // 觀測者本身的地面高度也一起查（alt 可能還沒填）
     flat.push({ lat: observer.lat, lng: observer.lng, dist: 0 });
     let lastError = null;
-    const elevs = await fetchElevations(flat, {
-      onProgress, onRetry, tolerateFailures: true,
-      onChunkError: (err) => { lastError = err; },
-    });
+    // 近處（≤12km）與遠處分兩批：近處範圍小，可用高解析圖磚（~40m），
+    // 遠處範圍大但對解析度不敏感（~280m 在 50km 外只差 0.3°）。
+    const NEAR = 12000;
+    const nearIdx = [], farIdx = [];
+    flat.forEach((p, i) => (p.dist <= NEAR ? nearIdx : farIdx).push(i));
+    const elevs = new Array(flat.length).fill(null);
+    const runBatch = async (idx, zMax, weight, offset) => {
+      if (!idx.length) return;
+      const vals = await fetchElevations(idx.map((i) => flat[i]), {
+        zMax, maxTiles: 16, onRetry, tolerateFailures: true,
+        onChunkError: (err) => { lastError = err; },
+        onProgress: onProgress ? (d, n) => onProgress(Math.round(offset + weight * (d / n) * flat.length), flat.length) : null,
+      });
+      idx.forEach((i, j) => { elevs[i] = vals[j]; });
+    };
+    const wNear = nearIdx.length / flat.length;
+    await runBatch(nearIdx, 12, wNear, 0);
+    await runBatch(farIdx, 10, 1 - wNear, wNear * flat.length);
     let idx = 0;
     rays.forEach((r) => r.pts.forEach((p) => { p.ground = elevs[idx++]; }));
     const centerGround = elevs[idx] != null ? elevs[idx] : (observer.alt || 0);
@@ -437,6 +643,9 @@
     fetchElevations, elevationAt, buildProfile, analyzePath, deygoutLossDb,
     computeCoveragePolygon, computeSkyline, skylineFromRays, skylinePeaks,
     K_OPTICAL,
+    // DEM 圖磚
+    decodeTerrarium, decodeTerrariumPng, tileCoord, pickZoom, demElevations,
+    setDemEnabled, demSupported, _demTiles: demTiles,
     _cache: cache,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

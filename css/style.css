@@ -136,29 +136,34 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .ar-tick b { font-size: 13px; text-shadow: 0 1px 2px #000; }
 
 .ar-labels { position: absolute; inset: 0; pointer-events: none; }
-.arlbl { position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer;
+/* 標籤不接收觸控：開羅盤時每幀重建，點擊一律由 ARView._tap 以座標判定 */
+.arlbl { position: absolute; transform: translate(-50%, -100%); pointer-events: none;
   text-align: center; white-space: nowrap; }
-.arlbl-name { display: block; font-weight: 700; color: #fff; -webkit-text-stroke: .5px #000; text-shadow: 0 1px 3px #000; font-size: 14px; }
-.arlbl-sub { display: block; font-size: 10px; color: #eaf0f6; text-shadow: 0 1px 2px #000; }
+/* AR 標籤字體：不用 -webkit-text-stroke —— 它在中文字上會把筆畫描成鏤空
+   鋸齒（手機實測「牛郎星」「大肚山台」都糊成一團）。改用半透明深色膠囊底，
+   疊在天空、相機實景上都清楚；字型指定蘋方/思源黑體，數字用等寬避免跳動。 */
+.arlbl-name, .arlbl-sub {
+  font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
+  display: inline-block; background: rgba(8,12,20,.66); border-radius: 999px;
+  text-shadow: none; letter-spacing: .02em; }
+.arlbl-name { font-weight: 600; color: #fff; font-size: 14.5px; padding: 2px 9px; line-height: 1.35; }
+.arlbl-sub { font-weight: 500; font-size: 11px; color: #e6edf5; padding: 1px 8px; margin-top: 2px; line-height: 1.3;
+  background: rgba(8,12,20,.52); }
+.arlbl > .arlbl-name + .arlbl-sub { display: table; margin-left: auto; margin-right: auto; }
 .arlbl-stick { position: absolute; left: 50%; top: 100%; width: 1px; background: rgba(255,255,255,.55); }
 .arlbl-station .arlbl-name { color: #8fd1ff; }
 .arlbl-custom .arlbl-name { color: #ffb247; }   /* 自訂站臺：琥珀色 */
 .arlbl-ok .arlbl-name { color: #7dffb0; }
 .arlbl-marg .arlbl-name { color: #ffd36b; }
 .arlbl-bad .arlbl-name { color: #ff9a9a; }
-.arlbl-sel .arlbl-name { color: #ffe27a; font-size: 16px; }
+.arlbl-sel .arlbl-name { color: #ffe27a; font-size: 16px; background: rgba(20,24,8,.8);
+  box-shadow: 0 0 0 1.5px #ffe27a; }
 /* 天文層標籤：淺色字疊在亮天空上看不清楚，加半透明深色底、字級加大 */
-.arlbl-sky-sun .arlbl-name, .arlbl-sky-moon .arlbl-name, .arlbl-sky-planet .arlbl-name,
-.arlbl-sky-star .arlbl-name, .arlbl-sky-sat .arlbl-name, .arlbl-sky-con .arlbl-name {
-  display: inline-block; background: rgba(6,10,18,.62); padding: 1px 8px; border-radius: 999px; }
-.arlbl-sky-sun .arlbl-sub, .arlbl-sky-moon .arlbl-sub, .arlbl-sky-planet .arlbl-sub,
-.arlbl-sky-star .arlbl-sub, .arlbl-sky-sat .arlbl-sub {
-  display: inline-block; background: rgba(6,10,18,.5); padding: 0 7px; border-radius: 999px;
-  color: #e6edf5; font-size: 11px; margin-top: 1px; }
 .arlbl-sky-sun .arlbl-name { color: #ffdf6b; }
 .arlbl-sky-moon .arlbl-name { color: #f3f7fd; }
 .arlbl-sky-planet .arlbl-name { color: #ffbe7d; }
-.arlbl-sky-star .arlbl-name { color: #e3eeff; font-size: 13.5px; font-weight: 700; }
+.arlbl-sky-star .arlbl-name { color: #e3eeff; font-size: 14px; }
 .arlbl-sky-sat .arlbl-name { color: #8bffd8; }
 .arlbl-sky-planet .arlbl-name::before,
 .arlbl-sky-star .arlbl-name::before { content: '• '; opacity: .8; }
@@ -347,3 +352,42 @@ body.ar-full-active { overflow: hidden; }
   .sat-row { min-height: 36px; font-size: 14px; }
   .sat-row input { width: 20px; height: 20px; }
 }
+
+/* ===== 方向指標 ===== */
+.ar-dir { position: absolute; z-index: 4; transform: translate(-50%, -50%); pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ar-dir-arrow { width: 58px; height: 58px; filter: drop-shadow(0 2px 4px rgba(0,0,0,.6));
+  animation: ar-dir-pulse 1.4s ease-in-out infinite; }
+.ar-dir-txt { font-size: 12px; font-weight: 700; color: #ffe27a; text-align: center; line-height: 1.3;
+  background: rgba(8,12,20,.72); border-radius: 8px; padding: 2px 8px; white-space: nowrap; }
+@keyframes ar-dir-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .62; } }
+.hud-arrow { width: 22px; height: 22px; vertical-align: -5px; margin-right: 6px; display: inline-block; }
+span.hud-arrow.ok { color: #7dffb0; font-size: 16px; width: auto; height: auto; vertical-align: 0; }
+
+/* ===== 地圖：疊加控制、我的位置、方向跟隨 ===== */
+#view-map { position: relative; overflow: hidden; }
+.map-ov { position: absolute; right: 10px; top: 10px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+.map-btn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25);
+  background: rgba(14,18,26,.86); color: #e8ecf1; font-size: 20px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,.45); touch-action: manipulation; }
+.map-compass svg { width: 34px; height: 34px; }
+.map-compass .nlab { display: none; }
+.map-compass.on { background: #2f6fff; border-color: #9cbcff; }
+.map-attrib { position: absolute; right: 4px; bottom: 2px; z-index: 1000; font-size: 10px;
+  background: rgba(255,255,255,.75); color: #333; padding: 0 4px; border-radius: 3px; }
+.map-attrib a { color: #0b57d0; text-decoration: none; }
+.map-follow-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 1000;
+  background: rgba(47,111,255,.92); color: #fff; font-size: 12px; font-weight: 600; padding: 4px 12px;
+  border-radius: 999px; display: none; pointer-events: none; }
+.map-rotated .map-follow-hint { display: block; }
+/* 方向跟隨時：地圖容器以中心旋轉；標籤反轉回正立（--mk-rot 由 map.js 設定） */
+#map { transform-origin: 50% 50%; }
+.map-rotated .mk { transform: translate(-50%, -50%) rotate(var(--mk-rot, 0deg)); }
+
+/* 我的位置：藍點 + 朝向扇形 */
+.me-loc { position: relative; width: 0; height: 0; }
+.me-dot { position: absolute; left: 0; top: 0; width: 18px; height: 18px; transform: translate(-50%, -50%);
+  border-radius: 50%; background: #2f6fff; border: 3px solid #fff; box-shadow: 0 0 0 2px rgba(47,111,255,.35), 0 1px 4px rgba(0,0,0,.5); }
+.me-cone { position: absolute; left: 0; top: 0; width: 90px; height: 90px; transform-origin: 50% 50%;
+  pointer-events: none; }

@@ -123,13 +123,16 @@
         <div id="sat-list" class="sat-list"></div>
         <div class="opts">
           <button id="btn-sat-tw" class="mini2">台灣在軌衛星全部加入</button>
+          <button id="btn-sat-geo" class="mini2">加入同步衛星</button>
           <button id="btn-sat-iss" class="mini2">只留 ISS</button>
         </div>
         <div class="paste-row">
           <input id="opt-sat-norad" type="text" inputmode="numeric" placeholder="輸入 NORAD 編號加入其他衛星（如 25544）" />
           <button id="btn-sat-add" class="mini2">加入</button>
         </div>
-        <div class="tip">在軌的才抓得到：福衛五號、福衛七號×6、獵風者、福衛八號A（福八B 之後、福九、B5G 尚未發射，無軌道可抓）。
+        <div class="tip"><b>低軌</b>衛星（福衛、ISS）一天只過境幾次、每次幾分鐘；肉眼要看得到須「天黑 + 衛星仍照得到太陽」，
+          通常只有日落後、日出前 1～2 小時。<b>同步</b>衛星固定在天空同一點、24 小時都在，但太暗肉眼看不到——適合對天線。<br>
+          在軌的才抓得到：福衛五號、福衛七號×6、獵風者、福衛八號A（福八B 之後、福九、B5G 尚未發射，無軌道可抓）。
           AR 只顯示當下在地平線上的衛星——低軌衛星多數時間在地平線下，台灣的全加也不會洗版；
           但整個通訊星系（Starlink 上萬顆、OneWeb 六百多顆）不適合整批加入，想看個別衛星請用 NORAD 編號。</div>
       </details>

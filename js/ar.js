@@ -86,6 +86,7 @@
         <svg class="ar-aim" preserveAspectRatio="none"></svg>
         <div class="ar-crosshair">+</div>
         <div class="ar-aimhud" style="display:none"></div>
+        <div class="ar-dir" style="display:none"></div>
         <div class="ar-readout"></div>
         <div class="ar-controls">
           <button data-act="sensor" title="使用手機羅盤">🧭 羅盤</button>
@@ -102,6 +103,7 @@
       this.$aim = this.root.querySelector('.ar-aim');
       this.$readout = this.root.querySelector('.ar-readout');
       this.$aimhud = this.root.querySelector('.ar-aimhud');
+      this.$dir = this.root.querySelector('.ar-dir');
       this.$cam = this.root.querySelector('.ar-cam');
 
       // 桌機拖曳 + 點擊對準
@@ -151,6 +153,7 @@
         if (!drag) return;
         const t = e.touches[0]; move(t.clientX, t.clientY);
       }, { passive: true });
+      this.root.addEventListener('touchcancel', () => { drag = null; this._pinch = null; });
       this.root.addEventListener('touchend', (e) => {
         if (this._pinch) {
           if (e.touches.length < 2) {
@@ -331,6 +334,8 @@
       window.removeEventListener('deviceorientationabsolute', this._onAbs, true);
       window.removeEventListener('deviceorientation', this._onRel, true);
       this.usingSensor = false;
+      this._syncControlState();
+      if (this.h.onSensorOff) this.h.onSensorOff();
       this._paint();
     }
 
@@ -361,6 +366,8 @@
         this.pitch = A * target + (1 - A) * this.pitch; // 俯仰角低通
       }
       this._paint();
+      // 地圖的方向跟隨也用同一個（已修正磁偏角、已濾波的）方位
+      if (hd != null && this.h.onHeading) this.h.onHeading(this.heading);
       return hd != null;
     }
 
@@ -449,16 +456,29 @@
 
     render(state) { this.state = state; this._paint(); }
 
-    /** 點擊 AR 畫面：選取離觸點最近的可見目標並對準它。 */
+    /**
+     * 點擊 AR 畫面：選取點到的標籤，沒點中就選最近的。
+     *
+     * 標籤本身不接收觸控（pointer-events:none）—— 開羅盤時每秒重繪 60 次、
+     * 標籤元素一直被換新，手指按下的那個元素放開前就被銷毀，事件會落在
+     * 脫離 DOM 的節點上，點擊永遠不生效。所以一律由穩定的外層用座標判定。
+     */
     _tap(clientX, clientY) {
       const r = this.root.getBoundingClientRect();
       const x = clientX - r.left, y = clientY - r.top;
-      let best = null, bd = Infinity;
-      (this._placed || []).forEach((c) => {
-        const d = Math.hypot(c.x - x, c.y - y);
-        if (d < bd) { bd = d; best = c; }
-      });
-      if (best && bd < 110 && this.h.onSelect) this.h.onSelect(best.t.id);
+      const targets = (this._placed || []).filter((c) => c.kind !== 'sky-con');
+      // 先看有沒有直接點在標籤框內（標籤錨點在底部中央，往上約 40px）
+      let hit = targets.find((c) =>
+        Math.abs(x - c.xl) <= c.w / 2 + 6 && y <= c.y + 8 && y >= c.y - 46);
+      if (!hit) {
+        let bd = Infinity;
+        targets.forEach((c) => {
+          const d = Math.hypot(c.xl - x, (c.y - 20) - y);
+          if (d < bd) { bd = d; hit = c; }
+        });
+        if (bd > 70) hit = null;
+      }
+      if (hit && this.h.onSelect) this.h.onSelect(hit.id);
     }
 
     /** 程式化轉向面對某方位/仰角（選取目標時用；感測器模式下不干預）。 */
@@ -583,7 +603,8 @@
           cand.push({
             id: o.id, name: o.name, kind: 'sky-sat', selected, stick: false,
             x: projX(o.az), y: projY(o.alt),
-            sub: `仰角 ${o.alt.toFixed(0)}° · ${Math.round(o.rangeKm)} km`,
+            sub: o.orbit === 'GEO' ? `同步·固定 仰角 ${o.alt.toFixed(0)}°`
+              : `仰角 ${o.alt.toFixed(0)}° · ${Math.round(o.rangeKm)} km${o.nakedEye ? ' · ✨可見' : ''}`,
             prio: (selected ? 1e9 : 0) + 3e5,
             readout: () => this._skyReadout(o), color: '#7dffcf',
           });
@@ -604,7 +625,7 @@
       const placed = [];
       cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
         const hit = placed.some((p) =>
-          Math.abs(p.xl - c.xl) < (p.w + c.w) / 2 && Math.abs(p.y - c.y) < 30);
+          Math.abs(p.xl - c.xl) < (p.w + c.w) / 2 && Math.abs(p.y - c.y) < 40);
         if (!c.selected && hit) return;
         placed.push(c);
         if (c.selected) aim = c;
@@ -630,10 +651,7 @@
       });
 
       this.$labels.innerHTML = html.join('');
-      this.$labels.querySelectorAll('.arlbl').forEach((el) => {
-        el.onclick = () => this.h.onSelect && this.h.onSelect(el.dataset.id);
-      });
-      this._placed = placed; // 供點擊對準用
+      this._placed = placed; // 供點擊判定用（見 _tap）
 
       this._paintAim(aim, W, H);
 
@@ -644,7 +662,7 @@
 
     // 對準 HUD：把手機當成天線對準器，即時比對「目前朝向」與「目標仰角/方位」
     _paintAimHud(target, me, st) {
-      if (!target) { this.$aimhud.style.display = 'none'; return; }
+      if (!target) { this.$aimhud.style.display = 'none'; this.$dir.style.display = 'none'; return; }
       const brg = Geo.bearing(me, target);
       const dist = Geo.distance(me, target);
       const obsAlt = (me.alt || 0) + (me.antenna || 0);
@@ -654,9 +672,23 @@
       const azOK = Math.abs(dAz) <= 3, elOK = Math.abs(dEl) <= 1;
       const elMsg = elOK ? '✅ 對準' : (dEl > 0 ? '抬高 ▲ ' + Math.abs(dEl).toFixed(1) + '°' : '壓低 ▼ ' + Math.abs(dEl).toFixed(1) + '°');
       const azMsg = azOK ? '✅ 對準' : (dAz > 0 ? '右轉 ▶ ' + Math.abs(Math.round(dAz)) + '°' : '左轉 ◀ ' + Math.abs(Math.round(dAz)) + '°');
+      // 目標在螢幕上的方向向量（右、下為正），用來畫指向箭頭
+      const W = this.root.clientWidth, H = this.root.clientHeight;
+      const vx = (dAz / (this.hfov / 2)) * (W / 2);
+      const vy = (-dEl / (this.vfov / 2)) * (H / 2);
+      const theta = Math.atan2(vy, vx) * 180 / Math.PI;      // 0°=右、90°=下
+      const arrowRot = theta + 90;                            // 箭頭圖預設朝上
+      const locked = azOK && elOK;
+      const offscreen = Math.abs(vx) > W / 2 - 24 || Math.abs(vy) > H / 2 - 24;
+      this._paintDirArrow(target, offscreen && !locked, theta, W, H, dAz, dEl);
+
+      const hudArrow = locked ? '<span class="hud-arrow ok">●</span>'
+        : `<svg class="hud-arrow" viewBox="-12 -12 24 24" style="transform:rotate(${arrowRot.toFixed(1)}deg)">` +
+          `<path d="M0 -10 L7 4 L2 2 L2 10 L-2 10 L-2 2 L-7 4 Z" fill="#ffd36b" stroke="#1a1200" stroke-width="1"/></svg>`;
+
       this.$aimhud.style.display = 'block';
       this.$aimhud.innerHTML =
-        `<div class="hud-name">🎯 ${target.name} · ${Geo.fmtDistance(dist)}</div>` +
+        `<div class="hud-name">${hudArrow}🎯 ${target.name} · ${Geo.fmtDistance(dist)}</div>` +
         `<div class="hud-row ${elOK ? 'hud-ok' : ''}"><span class="hud-k">仰角</span>` +
         `目前 <b>${this.pitch.toFixed(1)}°</b> → 目標 <b>${elev.toFixed(1)}°</b>` +
         `<span class="hud-d">${elMsg}</span></div>` +
@@ -665,6 +697,29 @@
         `<span class="hud-d">${azMsg}</span></div>` +
         (azOK && elOK ? `<div class="hud-locked">🔒 已對準目標！</div>` : '') +
         (!this.usingSensor ? `<div class="hud-note">桌機為模擬值；手機請按 🧭 羅盤，「目前」才是手機真實朝向</div>` : '');
+    }
+
+    /**
+     * 目標不在畫面內時，在畫面邊緣畫一個大箭頭指向它（像導航 App 那樣），
+     * 箭頭旁寫「右轉 127°」之類的提示。目標進到畫面內就收起來，改由瞄準圈標示。
+     */
+    _paintDirArrow(target, show, theta, W, H, dAz, dEl) {
+      if (!show) { this.$dir.style.display = 'none'; return; }
+      const rad = theta * Math.PI / 180;
+      const rx = W / 2 - 46, ry = H / 2 - 70;
+      // 沿橢圓放在邊緣附近；目標在正後方時（|dAz|>90）往左右邊緣靠
+      const cx = W / 2 + rx * Math.cos(rad), cy = H / 2 + ry * Math.sin(rad);
+      const turn = Math.abs(dAz) >= 3
+        ? (dAz > 0 ? `右轉 ${Math.round(Math.abs(dAz))}°` : `左轉 ${Math.round(Math.abs(dAz))}°`) : '';
+      const tilt = Math.abs(dEl) >= 1 ? (dEl > 0 ? `抬高 ${Math.abs(dEl).toFixed(0)}°` : `壓低 ${Math.abs(dEl).toFixed(0)}°`) : '';
+      this.$dir.style.display = 'block';
+      this.$dir.style.left = cx.toFixed(1) + 'px';
+      this.$dir.style.top = cy.toFixed(1) + 'px';
+      this.$dir.innerHTML =
+        `<svg class="ar-dir-arrow" viewBox="-30 -30 60 60" style="transform:rotate(${(theta + 90).toFixed(1)}deg)">` +
+        `<circle r="27" fill="rgba(8,12,20,.6)" stroke="#ffd36b" stroke-width="2"/>` +
+        `<path d="M0 -20 L13 2 L4 0 L4 18 L-4 18 L-4 0 L-13 2 Z" fill="#ffd36b"/></svg>` +
+        `<div class="ar-dir-txt">${target.name}<br>${[turn, tilt].filter(Boolean).join('・')}</div>`;
     }
 
     _paintCompass(W, horizonY) {

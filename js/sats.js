@@ -11,6 +11,7 @@
  *
  * 「抓得到」的前提是衛星在軌且被公開編目：
  *   ✅ 福衛五號、福衛七號×6、獵風者、福衛八號A、ISS
+ *   ✅ 同步衛星：ST-2（中華電信）、向日葵9號、Inmarsat 4-F1
  *   ❌ 福八B之後、福九、B5G —— 還沒發射，沒有軌道可抓
  */
 (function (global) {
@@ -37,6 +38,14 @@
     { id: 'fs7-4', name: '福衛七號-4', short: '福七4', norad: 44352, group: '氣象', match: ['COSMIC', 'FORMOSAT'] },
     { id: 'fs7-5', name: '福衛七號-5', short: '福七5', norad: 44353, group: '氣象', match: ['COSMIC', 'FORMOSAT'] },
     { id: 'fs7-6', name: '福衛七號-6', short: '福七6', norad: 44358, group: '氣象', match: ['COSMIC', 'FORMOSAT'] },
+    // 同步軌道（GEO）：在天空中固定不動，24 小時都在同一個方位/仰角。
+    // 肉眼看不到（太暗），但位置固定 —— 正適合拿來對碟型天線。
+    { id: 'st2', name: 'ST-2 中華電信', short: 'ST-2', norad: 37606, group: '同步',
+      match: ['ST-2', 'ST 2'], nameQuery: 'ST-2' },
+    { id: 'himawari9', name: '向日葵9號 氣象', short: '向日葵9', norad: 41836, group: '同步',
+      match: ['HIMAWARI'], nameQuery: 'HIMAWARI-9' },
+    { id: 'inmarsat4f1', name: 'Inmarsat 4-F1', short: 'I-4F1', norad: 28628, group: '同步',
+      match: ['INMARSAT'], nameQuery: 'INMARSAT 4-F1' },
   ];
   const byId = new Map(CATALOG.map((c) => [c.id, c]));
 
@@ -174,6 +183,45 @@
     try { return sat.twoline2satrec(t.l1, t.l2); } catch (_) { return null; }
   }
 
+  // ---- 肉眼可見性 ---------------------------------------------------------
+  // 低軌衛星本身不發光，是反射太陽光。肉眼看得到的條件：
+  //   1) 衛星還照得到太陽（不在地球的影子裡）
+  //   2) 觀測者這邊天已經暗了（太陽在地平線下 6° 以上，民用曙暮光結束）
+  // 所以通常只有日落後、日出前 1～2 小時看得到；深夜衛星多半在地影中。
+  const R_EARTH_KM = 6378.137;
+
+  /** 太陽在 ECI 座標的單位向量（低精度，足夠判斷地影） */
+  function sunUnitEci(date) {
+    if (!global.Sky) return null;
+    const s = Sky.sunEqu(Sky.julianDate(date));
+    const ra = s.ra * D2R, dec = s.dec * D2R;
+    return { x: Math.cos(dec) * Math.cos(ra), y: Math.cos(dec) * Math.sin(ra), z: Math.sin(dec) };
+  }
+
+  /** 衛星是否照得到太陽（圓柱形地影模型） */
+  function isSunlit(posEci, sun) {
+    if (!sun) return true;
+    const proj = posEci.x * sun.x + posEci.y * sun.y + posEci.z * sun.z;
+    if (proj > 0) return true;                       // 在地球朝向太陽那一側
+    const px = posEci.x - proj * sun.x, py = posEci.y - proj * sun.y, pz = posEci.z - proj * sun.z;
+    return Math.sqrt(px * px + py * py + pz * pz) > R_EARTH_KM;
+  }
+
+  /** 觀測者處的太陽仰角（度） */
+  function sunAltAt(obs, date) {
+    if (!global.Sky) return null;
+    const jd = Sky.julianDate(date), s = Sky.sunEqu(jd);
+    return Sky.equToHor(s.ra, s.dec, jd, obs.lat, obs.lng).alt;
+  }
+
+  /** 由平均運動（圈/日）分軌道類別 */
+  function orbitClass(rec) {
+    const revPerDay = rec.no * 1440 / (2 * Math.PI);   // satrec.no：rad/min
+    if (revPerDay < 1.1 && revPerDay > 0.9) return 'GEO';
+    if (revPerDay < 11) return 'MEO';
+    return 'LEO';
+  }
+
   /**
    * 回傳 ids 中「有 TLE」的衛星在 date 時刻的觀測資料。
    * @returns [{id, name, short, group, az, alt, rangeKm, subLat, subLng, heightKm}]
@@ -185,6 +233,8 @@
       height: (obs.alt || 0) / 1000,
     };
     const gmst = sat.gstime(date);
+    const sun = sunUnitEci(date);
+    const sunAlt = sunAltAt(obs, date);
     const out = [];
     for (const id of ids) {
       const e = entryOf(id);
@@ -192,6 +242,8 @@
       if (!e || !rec) continue;
       const pv = sat.propagate(rec, date);
       if (!pv || !pv.position) continue;
+      const orbit = orbitClass(rec);
+      const sunlit = isSunlit(pv.position, sun);
       const ecf = sat.eciToEcf(pv.position, gmst);
       const la = sat.ecfToLookAngles(observerGd, ecf);
       const gd = sat.eciToGeodetic(pv.position, gmst);
@@ -204,6 +256,9 @@
         subLat: sat.degreesLat(gd.latitude),
         subLng: sat.degreesLong(gd.longitude),
         heightKm: gd.height,
+        orbit, sunlit,
+        // 同步衛星太暗，肉眼一律看不到；低軌要「照得到太陽 + 天黑 + 在地平線上」
+        nakedEye: orbit === 'LEO' && sunlit && sunAlt != null && sunAlt < -6 && la.elevation * R2D > 10,
       });
     }
     return out;
@@ -217,6 +272,7 @@
     const { hours = 24, stepS = 30, minEl = 5, from = Date.now() } = opts;
     const rec = satrecOf(id);
     if (!rec || !sat) return null;
+    if (orbitClass(rec) === 'GEO') return null;   // 同步衛星固定不動，沒有升落
     const observerGd = {
       latitude: obs.lat * D2R, longitude: obs.lng * D2R, height: (obs.alt || 0) / 1000,
     };
@@ -237,19 +293,32 @@
         }
       } else if (cur) {
         cur.end = prevT;
-        cur.maxEl = Math.round(cur.maxEl * 10) / 10;
-        return cur;
+        return finishPass(rec, cur, obs);
       }
       prevT = t;
     }
-    if (cur) { cur.end = prevT; cur.maxEl = Math.round(cur.maxEl * 10) / 10; }
+    if (cur) { cur.end = prevT; return finishPass(rec, cur, obs); }
     return cur;
+  }
+
+  /** 收尾：四捨五入，並判斷最高點那一刻肉眼看不看得到 */
+  function finishPass(rec, p, obs) {
+    p.maxEl = Math.round(p.maxEl * 10) / 10;
+    const d = new Date(p.maxT);
+    const pv = sat.propagate(rec, d);
+    const sunAlt = sunAltAt(obs, d);
+    p.sunlit = pv && pv.position ? isSunlit(pv.position, sunUnitEci(d)) : null;
+    p.dark = sunAlt != null ? sunAlt < -6 : null;
+    p.visible = !!(p.sunlit && p.dark);
+    return p;
   }
 
   global.Sats = {
     CATALOG, entryOf, available: !!sat,
     ensureTles, getStatus, hasTle, getTle, _setTle, parseTleText,
     positions, nextPass,
-    TAIWAN_IDS: CATALOG.filter((c) => c.group !== '國際').map((c) => c.id),
+    TAIWAN_IDS: CATALOG.filter((c) => c.group !== '國際' && c.group !== '同步').map((c) => c.id),
+    GEO_IDS: CATALOG.filter((c) => c.group === '同步').map((c) => c.id),
+    isSunlit, orbitClass,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

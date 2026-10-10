@@ -91,6 +91,9 @@ console.log('elevation — Deygout 多重刀刃');
   ok('Deygout 有界 (<150 dB)', single.diffractionMulti < 150);
 }
 
+// 下列既有測試以 open-meteo 的 mock 驗證；DEM 圖磚另有專屬測試（runParseTests 內）
+Elevation.setDemEnabled(false);
+
 console.log('elevation — 地形涵蓋多邊形 (mock fetch)');
 {
   const savedFetch = global.fetch;
@@ -404,11 +407,138 @@ async function runParseTests() {
       Parse.parseStations('<gpx><wpt lat="24" lon="121"/></gpx>', 'x.gpx').markers.length === 0);
   }
 
+  console.log('elevation — DEM 地形圖磚（Terrarium PNG）');
+  {
+    const zlib = require('zlib');
+    ok('Terrarium 解碼：海平面', Elevation.decodeTerrarium(128, 0, 0) === 0);
+    ok('Terrarium 解碼：3952m', Elevation.decodeTerrarium(143, 112, 0) === 3952);
+    ok('Terrarium 解碼：小數（B 通道）', Elevation.decodeTerrarium(128, 10, 128) === 10.5);
+
+    // 圖磚座標：玉山 z10 應落在 x=856、y=456 附近（已用實際圖磚對照過）
+    const t = Elevation.tileCoord(23.47, 120.9573, 10);
+    ok('tileCoord 玉山 z10 → x≈856.06', approx(t.x, 856.06, 0.01));
+    ok('tileCoord 緯度越北 y 越小', Elevation.tileCoord(25, 121, 10).y < Elevation.tileCoord(23, 121, 10).y);
+
+    // pickZoom：點越分散，層級越低（圖磚數維持上限內）
+    const ring = [];
+    for (let i = 0; i < 96; i++) ring.push(Geo.destination({ lat: 24.1, lng: 120.7 }, i * 3.75, 90000));
+    const zFar = Elevation.pickZoom(ring, { maxTiles: 16 });
+    const zOne = Elevation.pickZoom([{ lat: 24.1, lng: 120.7 }], { maxTiles: 16 });
+    ok('pickZoom 單點取最高層級 (12)', zOne === 12);
+    ok('pickZoom 90km 環 → 較低層級且圖磚 ≤16', zFar <= 10 && (() => {
+      const set = new Set(ring.map((p) => { const c = Elevation.tileCoord(p.lat, p.lng, zFar); return Math.floor(c.x) + '/' + Math.floor(c.y); }));
+      return set.size <= 16;
+    })());
+
+    // 自己編一張 Terrarium PNG：海拔 = 1000 + 10·x − 5·y，五種濾波器輪流用
+    function makePng(w, h, elevAt) {
+      const bpp = 3, stride = w * bpp;
+      const rows = [];
+      for (let y = 0; y < h; y++) {
+        const r = Buffer.alloc(stride);
+        for (let x = 0; x < w; x++) {
+          const v = elevAt(x, y) + 32768;
+          r[x * 3] = Math.floor(v / 256); r[x * 3 + 1] = Math.floor(v) % 256; r[x * 3 + 2] = Math.round((v % 1) * 256);
+        }
+        rows.push(r);
+      }
+      const out = [];
+      for (let y = 0; y < h; y++) {
+        const f = y % 5, cur = rows[y], prev = y ? rows[y - 1] : Buffer.alloc(stride);
+        const enc = Buffer.alloc(stride + 1); enc[0] = f;
+        for (let i = 0; i < stride; i++) {
+          const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+          let pr = 0;
+          if (f === 1) pr = a; else if (f === 2) pr = b; else if (f === 3) pr = (a + b) >> 1;
+          else if (f === 4) { const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c); pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); }
+          enc[i + 1] = (cur[i] - pr) & 255;
+        }
+        out.push(enc);
+      }
+      const chunk = (type, data) => {
+        const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+        const td = Buffer.concat([Buffer.from(type), data]);
+        const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32 ? zlib.crc32(td) >>> 0 : 0);
+        return Buffer.concat([len, td, crc]);
+      };
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+      ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+      return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr),
+        chunk('IDAT', zlib.deflateSync(Buffer.concat(out))), chunk('IEND', Buffer.alloc(0))]);
+    }
+    const plane = (x, y) => 1000 + 10 * x - 5 * y;
+    const png = makePng(256, 256, plane);
+    const dec = await Elevation.decodeTerrariumPng(png);
+    let maxErr = 0;
+    for (let y = 0; y < 256; y += 7) for (let x = 0; x < 256; x += 7) {
+      maxErr = Math.max(maxErr, Math.abs(dec.data[y * 256 + x] - plane(x, y)));
+    }
+    ok('PNG 解碼尺寸 256×256', dec.w === 256 && dec.h === 256);
+    ok('PNG 解碼（五種濾波器）與原值一致 <0.01m', maxErr < 0.01);
+    let bad = null;
+    try { await Elevation.decodeTerrariumPng(Buffer.from('not a png')); } catch (e) { bad = e; }
+    ok('非 PNG 會拋錯（交給備援）', bad !== null);
+
+    // fetchElevations 走 DEM：mock S3 回傳上面那張圖磚
+    const savedFetch = global.fetch;
+    let s3 = 0, meteo = 0;
+    global.fetch = async (url) => {
+      if (/elevation-tiles-prod/.test(url)) {
+        s3++;
+        return { ok: true, status: 200, arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.length) };
+      }
+      meteo++;
+      return { ok: false, status: 500, headers: { get: () => null } };
+    };
+    Elevation.setDemEnabled(true);
+    Elevation._cache.clear();
+    Elevation._demTiles.clear();
+    // 取 z12 某圖磚內的已知像素中心位置，反推經緯度
+    const z = 12, tx = 3425, ty = 1752;
+    const px = 100.5, py = 60.5;   // 像素中心 → 應精確取到 plane(100, 60)
+    const n = Math.pow(2, z);
+    const lng = (tx + px / 256) / n * 360 - 180;
+    const yy = (ty + py / 256) / n;
+    const lat = Math.atan(Math.sinh(Math.PI * (1 - 2 * yy))) * 180 / Math.PI;
+    const vals = await Elevation.fetchElevations([{ lat, lng }], { zMax: 12, dem: true });
+    ok('DEM 取樣值正確（像素中心 = 1000+10·100−5·60 = 1700）', approx(vals[0], 1700, 0.5));
+    ok('有走 DEM、沒去問 open-meteo', s3 >= 1 && meteo === 0);
+    // 同一張圖磚再查不重抓
+    const s3Before = s3;
+    await Elevation.fetchElevations([{ lat: lat + 0.001, lng: lng + 0.001 }], { zMax: 12 });
+    ok('同一張圖磚命中記憶體快取（不重抓）', s3 === s3Before);
+
+    // 圖磚抓不到 → 自動退回 open-meteo
+    Elevation._cache.clear(); Elevation._demTiles.clear();
+    s3 = 0; meteo = 0;
+    global.fetch = async (url) => {
+      if (/elevation-tiles-prod/.test(url)) { s3++; return { ok: false, status: 403 }; }
+      meteo++;
+      const u = new URL(url);
+      const k = u.searchParams.get('latitude').split(',').length;
+      return { ok: true, json: async () => ({ elevation: Array(k).fill(321) }) };
+    };
+    const fb = await Elevation.fetchElevations([{ lat: 23.1, lng: 121.1 }], { maxRetry: 0 });
+    ok('DEM 失敗 → 退回 open-meteo 取得 321m', fb[0] === 321 && s3 >= 1 && meteo === 1);
+
+    // 海底地形一律視為海面 0m（視線看到的是海面）
+    const sea = makePng(256, 256, () => -150);
+    global.fetch = async (url) => ({ ok: true, status: 200,
+      arrayBuffer: async () => sea.buffer.slice(sea.byteOffset, sea.byteOffset + sea.length) });
+    Elevation._cache.clear(); Elevation._demTiles.clear();
+    const sv = await Elevation.fetchElevations([{ lat: 22.0, lng: 119.0 }]);
+    ok('海底 −150m 夾為 0m', sv[0] === 0);
+
+    global.fetch = savedFetch;
+    Elevation._cache.clear(); Elevation._demTiles.clear();
+    Elevation.setDemEnabled(false);
+  }
+
   console.log('sats — 多衛星追蹤（TLE + SGP4）');
   {
     ok('SGP4 引擎已載入', Sats.available === true);
     const ids = Sats.CATALOG.map((c) => c.id);
-    ok('目錄 10 顆（台灣 9 + ISS）', ids.length === 10 && Sats.TAIWAN_IDS.length === 9);
+    ok('目錄 13 顆（台灣 9 + ISS + 同步 3）', ids.length === 13 && Sats.TAIWAN_IDS.length === 9);
     ok('目錄 id 不重複', new Set(ids).size === ids.length);
     ok('自訂 NORAD 動態項目', (Sats.entryOf('norad-43013') || {}).norad === 43013);
     ok('非法 id 回傳 null', Sats.entryOf('xx-123') == null && Sats.entryOf('norad-abc') == null);
@@ -447,6 +577,37 @@ async function runParseTests() {
     ok('最大仰角 ≥ 門檻 5°', np.maxEl >= 5);
     const durMin = (np.end - np.start) / 60000;
     ok('過境時長合理（1–12 分鐘）', durMin >= 1 && durMin <= 12);
+    ok('過境結果含肉眼可見性欄位', typeof np.visible === 'boolean' && 'sunlit' in np && 'dark' in np);
+
+    // ---- 同步衛星 ----
+    ok('目錄含 3 顆同步衛星', Sats.GEO_IDS.length === 3 && Sats.GEO_IDS.indexOf('st2') >= 0);
+    ok('「台灣在軌」不含同步/國際', Sats.TAIWAN_IDS.every((id) => ['st2', 'himawari9', 'inmarsat4f1', 'iss'].indexOf(id) < 0));
+    const perDay = (r) => ({ no: r * 2 * Math.PI / 1440 });
+    ok('軌道分類：1.0027 圈/日 → GEO', Sats.orbitClass(perDay(1.0027)) === 'GEO');
+    ok('軌道分類：15.5 圈/日 → LEO', Sats.orbitClass(perDay(15.5)) === 'LEO');
+    ok('軌道分類：2 圈/日 → MEO', Sats.orbitClass(perDay(2.0)) === 'MEO');
+
+    // 造一組 GEO 的 TLE（含校驗碼），驗證「天上固定不動」
+    const cks = (l) => { let s = 0; for (const ch of l) { if (/\d/.test(ch)) s += +ch; else if (ch === '-') s += 1; } return s % 10; };
+    let g1 = '1 37606U 11022B   24001.50000000 -.00000300  00000-0  00000-0 0  999'; g1 += cks(g1);
+    let g2 = '2 37606   0.0200 280.0000 0002000 200.0000 100.0000  1.00270000 47000'; g2 += cks(g2);
+    Sats._setTle('st2', 'ST-2', g1, g2);
+    const t1 = new Date(Date.UTC(2024, 0, 1, 12, 0, 0));
+    const t2 = new Date(t1.getTime() + 6 * 3600e3);
+    const a1 = Sats.positions(['st2'], obs, t1)[0], a2 = Sats.positions(['st2'], obs, t2)[0];
+    ok('GEO 被辨識為同步軌道', a1.orbit === 'GEO');
+    ok('GEO 高度 ~35786km', Math.abs(a1.heightKm - 35786) < 300);
+    const dA = Math.abs(((a1.az - a2.az + 540) % 360) - 180);
+    ok('GEO 6 小時後方位/仰角幾乎不變（<0.5°）', dA < 0.5 && Math.abs(a1.alt - a2.alt) < 0.5);
+    ok('GEO 沒有「過境」（nextPass 回傳 null）', Sats.nextPass('st2', obs, { from: t1.getTime() }) === null);
+    ok('GEO 一律標記肉眼看不到', a1.nakedEye === false);
+
+    // ---- 地影（圓柱模型）----
+    const sunX = { x: 1, y: 0, z: 0 };
+    ok('朝太陽一側 → 照得到', Sats.isSunlit({ x: 7000, y: 0, z: 0 }, sunX) === true);
+    ok('正背面低軌 → 在地影中', Sats.isSunlit({ x: -6800, y: 0, z: 0 }, sunX) === false);
+    ok('背面但偏出地球半徑 → 照得到', Sats.isSunlit({ x: -6800, y: 6500, z: 0 }, sunX) === true);
+    ok('背面高軌偏離 → 照得到', Sats.isSunlit({ x: -42000, y: 7000, z: 0 }, sunX) === true);
   }
 
   console.log(`\n結果：${pass} 通過，${fail} 失敗`);
