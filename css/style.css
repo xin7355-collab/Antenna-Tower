@@ -168,6 +168,9 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-sky-planet .arlbl-name::before,
 .arlbl-sky-star .arlbl-name::before { content: '• '; opacity: .8; }
 .arlbl-marker .arlbl-name { color: #ffb3ea; }
+/* 被前方山稜擋住、肉眼看不到的目標：半透明，與看得到的區分 */
+.arlbl-behind { opacity: .58; }
+.arlbl-behind.arlbl-sel { opacity: 1; }
 .arlbl-sky-con .arlbl-name { color: #aedaff; font-size: 13px; font-weight: 700; letter-spacing: .05em; }
 /* 群組色點：站臺的通/繞/擋用名稱顏色，群組則靠這個小圓點區分 */
 .arlbl-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -231,7 +234,8 @@ body.ar-full-active { overflow: hidden; }
   .panel { border-left: 0; border-top: 1px solid #2a313b; }
 
   /* 手指比滑鼠粗：把可點元件加高到好按的尺寸（原本最小只有 22px） */
-  .panel button, .panel select { min-height: 40px; }
+  .panel button, .panel select,
+  .panel input[type="text"], .panel input[type="number"], .panel input[type="datetime-local"] { min-height: 40px; }
   .panel .gf { min-height: 34px; padding: 5px 11px; }
   .panel .ed-ico { min-height: 42px; min-width: 42px; font-size: 18px; }
   .opts .chk { min-height: 34px; }

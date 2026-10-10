@@ -138,13 +138,16 @@
       </details>
 
       <details class="adv" id="ar-adv">
-        <summary>AR 校正：磁偏角 / 視野</summary>
+        <summary>AR 校正：磁偏角 / 視野 / 相機鏡頭</summary>
         <div class="opts">
           <label>磁偏角(°)<input id="opt-decl" type="number" step="0.1" value="-4.5" /></label>
-          <label>視野(°)<input id="opt-hfov" type="number" step="1" min="40" max="110" value="70" /></label>
+          <label>視野(°)<input id="opt-hfov" type="number" step="1" min="20" max="120" value="70" /></label>
+          <label>相機鏡頭(°)<input id="opt-camfov" type="number" step="1" min="30" max="120" value="68" /></label>
         </div>
         <div class="tip">羅盤讀到的是<b>磁北</b>，台灣磁偏角約 -4.5°（西偏為負），已預設修正成真北。
-          開相機後若標籤與實景左右對不齊，請在 AR 畫面<b>雙指縮放</b>（或改「視野」數字）校正到一致。</div>
+          「視野」是沒開相機時的畫面寬度；開相機時改用「相機鏡頭」視角（主鏡頭長邊，
+          多數手機約 66–72°）自動推算畫面實際視角，直拿手機約 40°。
+          若標籤與實景仍左右對不齊，開著相機在 AR 畫面<b>雙指縮放</b>校正，會自動存成鏡頭視角。</div>
       </details>
 
       <details class="adv">

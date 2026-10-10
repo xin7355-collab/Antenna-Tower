@@ -49,8 +49,14 @@ node test/geo.test.js         # 執行單元測試（無相依）
   無線電分析（遮蔽/連結預算）仍用設定的 4/3，勿混用。
 - 羅盤給的是**磁北**，`_onOrient` 以 `settings.declination`（預設 -4.5，
   台灣）換算真北後才用。
-- 視野角是實例屬性 `this.hfov`（可被雙指縮放與設定改動），
-  **不要再引入固定的 HFOV 常數**；垂直視野依 `VFOV_RATIO` 連動。
+- 投影一律走 `makeProjection`（透視／針孔相機），**不要再用「角度線性對應像素」**：
+  那會讓偏離中心的標籤與相機實景對不上。水平垂直同一比例尺，垂直視野由
+  畫面長寬比推得（`proj.vfov`），沒有另外的縱向誇大。
+- 視野角是實例屬性 `this.hfov`，**不要再引入固定的 HFOV 常數**。沒開相機時
+  = `this.baseHfov`（設定「視野」）；開相機時由 `camDisplayHfov(串流寬高, 視窗寬高,
+  settings.camFov)` 推算（object-fit: cover 裁切，直拿手機約 40°）。開相機時的雙指
+  縮放存成 `settings.camFov`（鏡頭長邊視角），不是存畫面視角 —— 換方向/全螢幕後
+  畫面視角會變，鏡頭視角不會。
 - 衛星一律走 `js/sats.js`（TLE 快取 12h + vendor/satellite 的 SGP4 本地
   傳播），不要對衛星位置輪詢網路；wheretheiss 只是 ISS 抓不到 TLE 時的
   備援。`Sky.predictPasses`（圓軌道近似）只給該備援用，TLE 在手時
@@ -65,6 +71,8 @@ node test/geo.test.js         # 執行單元測試（無相依）
   **不要改用 canvas getImageData**：Safari 反指紋會加雜訊，R 通道錯 1 = 256m。
 - 單元測試裡 open-meteo 的 mock 測試要先 `Elevation.setDemEnabled(false)`
   （Node 22 也有 DecompressionStream，否則會先去打圖磚）。
+- 圖磚解碼後一律經 `despikeTile` 去單點尖刺（Terrarium 部分海岸線有 ±2000m 雜訊），
+  門檻 max(200m, 1.5 像素寬)；改門檻要確認陡稜線/山頭的測試仍通過。
 
 ## AR 點選與地圖旋轉
 - AR 標籤 `pointer-events: none`，點擊一律由 `ARView._tap` 用座標判定。
@@ -77,8 +85,19 @@ node test/geo.test.js         # 執行單元測試（無相依）
 ## 天際線（山體輪廓）
 - 仰角用可見光的等效地球半徑 `Elevation.K_OPTICAL`（≈1.13），
   不是無線電的 4/3 —— AR 疊在相機畫面上才對得準。
-- 取資料（`computeSkyline`）與算稜線（`skylineFromRays`）分開，後者為純函式，
-  改動時請一併補測試。
+- 主要做法 `computeSkylineDem`：圖磚依距離環帶（`SKY_RINGS`：≤20km z12、≤60km z10、
+  ≤150km z8）一次抓好，720 條射線在本地逐像素掃描。環帶與 zoom 是用真值比對
+  實測選的（台中平均差 0.008°），**不要為了省流量改回稀疏取樣**——舊版稜線頂
+  常落在取樣點之間，遠山整排畫矮約 1°。
+- 掃描邏輯 `prepareMarch`/`marchRay`（`marchSkyline` 為同步純函式）與取資料分開，
+  高程由 `sample(sinLat, lng, ring)` 注入，改動時請用合成地形補測試。
+  `computeSkylineSparse`（舊稀疏法、走 open-meteo）只是 DEM 不可用時的備援。
+- 每條射線另存遮擋斷點 `bp`，AR 用 `Elevation.skylineHides` 判斷目標是否被
+  更近的稜線擋住；比較時目標仰角要用 `skyline.obsAlt` 重算（同一基準）。
+- 方位一律等間隔（第 i 筆 = i × `step`），查值用 `skylineElevAt`（索引內插），
+  不要再線性搜尋。
+- 輪廓存在獨立的 localStorage key `vrmap.skyline.v2`（約 100–200 KB），
+  只在算完/清除/換位置時寫，**不要塞回主狀態**（主狀態每次改設定都會重寫）。
 
 ## 用語
 - 一律使用「**站臺**」（不用「站台」）。

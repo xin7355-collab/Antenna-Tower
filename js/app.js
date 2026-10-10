@@ -33,12 +33,15 @@
       hiddenGroups: [], // 被隱藏的群組 id
       declination: -4.5, // 磁偏角（°，東偏為正）；羅盤讀到的是磁北，台灣約 -4.5
       sats: ['iss'],    // 追蹤中的衛星（js/sats.js 目錄 id 或 norad-XXXXX）
-      hfov: 70,         // AR 水平視野角（°），開相機時可用雙指縮放校正
+      hfov: 70,         // AR 水平視野角（°，沒開相機時）
+      camFov: 68,       // 相機鏡頭「長邊」視角（°）；開相機時畫面視角由它推算，雙指縮放校正的就是它
     },
   };
 
   let mapView, arView;
   const LS_KEY = 'vrmap.state.v1';
+  // 山體輪廓單獨存：720 個方位 + 遮擋斷點約 100–200 KB，不該在每次存設定時一起重寫
+  const SKY_KEY = 'vrmap.skyline.v2';
 
   /** 所有可選取的地面實體（不含「我的位置」） */
   function allTargets() {
@@ -59,7 +62,8 @@
     state.me.lat = lat;
     state.me.lng = lng;
     state.analysisById = {};
-    state.skyline = null;   // 換位置了，舊的山體輪廓不再適用（saveState 在下面）
+    state.skyline = null;   // 換位置了，舊的山體輪廓不再適用
+    saveSkyline();
     const slEl = document.getElementById('skyline-status');
     if (slEl) slEl.textContent = '';
     saveState();
@@ -75,11 +79,26 @@
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
         me: state.me, stations: state.stations, markers: state.markers, settings: state.settings,
-        // 輪廓一併存起來：重開 App 不必再跟高程服務要一次（那是被限流的主因）
-        skyline: state.skyline ? { at: state.skyline.at, obsAlt: state.skyline.obsAlt,
-          points: state.skyline.points, coverage: state.skyline.coverage } : null,
       }));
     } catch (_) { /* localStorage 可能被停用，忽略 */ }
+  }
+
+  /**
+   * 輪廓存起來：重開 App 不必再抓一次圖磚。數值先四捨五入
+   * （仰角到 0.001°、距離到 10 m），體積少一半以上，精度遠高於畫面所需。
+   */
+  function saveSkyline() {
+    try {
+      const sl = state.skyline;
+      if (!sl) { localStorage.removeItem(SKY_KEY); return; }
+      const r = (v, k) => (v == null ? null : Math.round(v * k) / k);
+      localStorage.setItem(SKY_KEY, JSON.stringify({
+        at: sl.at, obsAlt: r(sl.obsAlt, 10), ground: r(sl.ground, 10), step: sl.step,
+        rangeKm: sl.rangeKm, coverage: sl.coverage, source: sl.source,
+        points: sl.points.map((p) => ({ az: r(p.az, 100), elev: r(p.elev, 1000), dist: r(p.dist, 0.1), ground: r(p.ground, 1) })),
+        bp: sl.bp || null,
+      }));
+    } catch (_) { /* 空間不足或被停用：這次就不存，下次重算 */ }
   }
   function loadState() {
     try {
@@ -99,10 +118,15 @@
       }
       if (Array.isArray(d.markers)) state.markers = d.markers;
       if (d.settings) Object.assign(state.settings, d.settings);
+      // 輪廓：新版存在獨立的 key；舊版夾在主狀態裡（96 個方位、沒有遮擋斷點）
+      let sl = null;
+      try { sl = JSON.parse(localStorage.getItem(SKY_KEY) || 'null'); } catch (_) { sl = null; }
+      const legacy = !sl && !!d.skyline;
+      if (legacy) sl = d.skyline;
       // 只有在「還站在同一個地方」時才沿用舊輪廓；移動超過 300m 就作廢
-      if (d.skyline && d.skyline.at && Array.isArray(d.skyline.points)) {
-        const moved = Geo.distance(d.skyline.at, state.me);
-        if (moved < 300) state.skyline = d.skyline;
+      if (sl && sl.at && Array.isArray(sl.points) && Geo.distance(sl.at, state.me) < 300) {
+        state.skyline = sl;
+        if (legacy) saveSkyline();   // 搬到新 key，主狀態下次存檔就不再夾帶它
       }
     } catch (_) { /* 資料毀損則忽略 */ }
   }
@@ -560,7 +584,10 @@
       const sl = await Elevation.computeSkyline(state.me, {
         eyeHeight: state.me.antenna || 2,
         onProgress: (done, total) => {
-          if (el) el.textContent = `⏳ 取地形中… ${Math.round((done / total) * 100)}%${retrying}`;
+          const pct = Math.round((done / total) * 100);
+          if (el) el.textContent = pct < 90 || retrying
+            ? `⏳ 取地形中… ${pct}%${retrying}`
+            : `⏳ 計算稜線中… ${pct}%`;
         },
         onRetry: (n, waitMs, status) => {
           retrying = status === 429
@@ -570,19 +597,21 @@
         },
       });
       state.skyline = sl;
-      saveState();          // 存起來，下次開 App 不必再跟高程服務要一次
+      saveSkyline();        // 存起來，下次開 App 不必再抓一次
       const peaks = Elevation.skylinePeaks(sl.points);
       const partial = sl.coverage < 0.999;
+      const range = sl.rangeKm ? `、看到 ${sl.rangeKm} km` : '';
       if (el) el.innerHTML = partial
-        ? `<span class="warn">◐ 已畫出部分輪廓（取到 ${Math.round(sl.coverage * 100)}% 方位、` +
+        ? `<span class="warn">◐ 已畫出部分輪廓（${Math.round(sl.coverage * 100)}% 方位資料完整、` +
           `${peaks.length} 座山頭）。稍後再按一次可補齊剩下的。</span>`
-        : `<span class="ok">✓ 已畫出山體輪廓（${sl.points.length} 個方位、` +
+        : `<span class="ok">✓ 已畫出山體輪廓（${sl.points.length} 個方位${range}、` +
           `找到 ${peaks.length} 座山頭）</span>`;
       showARTab();
       arView.render(state);
     } catch (err) {
       const rate = /429|過於頻繁/.test(err.message);
-      if (el) el.innerHTML = `<span class="warn">⚠️ ${err.message}${rate ? '' : '（需連線 open-meteo.com）'}</span>`;
+      if (el) el.innerHTML = `<span class="warn">⚠️ 山體輪廓計算失敗：${err.message}` +
+        `${rate ? '' : '（需連線 s3.amazonaws.com 地形圖磚；備援 open-meteo.com）'}</span>`;
     }
     if (btn) btn.disabled = false;
     computingSky = false;
@@ -590,7 +619,7 @@
 
   function clearSkyline() {
     state.skyline = null;
-    saveState();
+    saveSkyline();
     const el = document.getElementById('skyline-status');
     if (el) el.textContent = '';
     arView.render(state);
@@ -748,6 +777,7 @@
     set('opt-clickadds', state.settings.mapClickAdds || 'station');
     set('opt-decl', state.settings.declination != null ? state.settings.declination : -4.5);
     set('opt-hfov', state.settings.hfov || 70);
+    set('opt-camfov', Math.round(state.settings.camFov || 68));
     skyTicker();
     satTicker();
   }
@@ -1030,7 +1060,14 @@
     };
     document.getElementById('opt-hfov').onchange = (e) => {
       const v = parseFloat(e.target.value);
-      if (isFinite(v)) { arView.setFov(v); state.settings.hfov = Math.round(arView.hfov); e.target.value = state.settings.hfov; saveState(); }
+      if (isFinite(v)) { arView.setBaseFov(v); state.settings.hfov = Math.round(arView.baseHfov); e.target.value = state.settings.hfov; saveState(); }
+    };
+    document.getElementById('opt-camfov').onchange = (e) => {
+      const v = parseFloat(e.target.value);
+      state.settings.camFov = isFinite(v) ? Math.max(30, Math.min(120, v)) : 68;
+      e.target.value = Math.round(state.settings.camFov);
+      saveState();
+      arView.refreshCamFov();
     };
 
     // 山體輪廓
@@ -1130,6 +1167,7 @@
           state.analysisById = {};
           state.selectedId = null;
           state.skyline = null;
+          saveSkyline();
           learnGroups();
           saveState();
           syncControls();
@@ -1144,9 +1182,10 @@
       reader.readAsText(file);
       fileInput.value = '';
     };
-    document.getElementById('btn-reset').onclick = () => {
-      if (!confirm('還原為預設站臺資料？（會清除你的變更）')) return;
-      try { localStorage.removeItem(LS_KEY); } catch (_) {}
+    document.getElementById('btn-reset').onclick = async () => {
+      // 用 UI.confirm：獨立模式（加入主畫面）下內建 confirm 不可靠
+      if (!await UI.confirm('還原為預設資料', '會清除你的站臺、標註與設定變更，此動作無法復原。', '還原', true)) return;
+      try { localStorage.removeItem(LS_KEY); localStorage.removeItem(SKY_KEY); } catch (_) {}
       state.me = { ...S.me };
       state.stations = S.stations.map((s) => ({ ...s }));
       state.peaks = S.peaks.map((p) => ({ ...p }));
@@ -1310,6 +1349,13 @@
       const el = document.getElementById('opt-hfov');
       if (el) el.value = state.settings.hfov;
     },
+    // 開相機時雙指縮放 → 校正的是鏡頭視角（換方向、全螢幕後仍然準）
+    onCamFov: (v) => {
+      state.settings.camFov = Math.round(v * 10) / 10;
+      saveState();
+      const el = document.getElementById('opt-camfov');
+      if (el) el.value = Math.round(state.settings.camFov);
+    },
     onMove: (id, lat, lng) => {
       const ent = findEntity(id);
       if (!ent) return;
@@ -1350,14 +1396,18 @@
     }
     arView = new ARView('view-ar', handlers);
     renderSatList();
-    if (state.settings.hfov && state.settings.hfov !== 70) arView.setFov(state.settings.hfov);
+    if (state.settings.hfov && state.settings.hfov !== 70) arView.setBaseFov(state.settings.hfov);
     bindControls();
     render();
     // 沿用上次存下來的輪廓時要講清楚，免得以為是這次算的
     if (state.skyline) {
       const el = document.getElementById('skyline-status');
-      if (el) el.innerHTML = `<span class="ok">✓ 已沿用上次算好的山體輪廓` +
-        `（${state.skyline.points.length} 個方位）。位置有變或想重算就按「畫出輪廓」。</span>`;
+      // 舊版輪廓（每 3.75° 一個方位、沒有遮擋資料）會把遠山畫矮，提醒重算
+      if (el) el.innerHTML = state.skyline.bp
+        ? `<span class="ok">✓ 已沿用上次算好的山體輪廓` +
+          `（${state.skyline.points.length} 個方位）。位置有變或想重算就按「畫出輪廓」。</span>`
+        : `<span class="warn">◐ 沿用的是舊版山體輪廓（較粗略，遠山會偏矮）。` +
+          `請按「畫出輪廓」重算一次。</span>`;
     }
     // 預設選第一個站臺展示
     if (state.stations[0]) select(state.stations[0].id);

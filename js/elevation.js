@@ -3,11 +3,11 @@
  * ------------------------------------------------------------------
  * 「中間有沒有山擋住？」的核心邏輯。
  *
- * 1. 透過 Open-Meteo Elevation API 取得任意座標的地面海拔（免金鑰）。
+ * 1. 取得任意座標的地面海拔：主要用 DEM 地形圖磚（AWS Terrarium），
+ *    抓不到時退回 Open-Meteo Elevation API（免金鑰、有速率限制）。
  * 2. 沿兩點大圓路徑取樣，組出「地形剖面」。
  * 3. 以地球曲率 + 菲涅耳區判斷無線電/視線路徑是否被地形擋住。
- *
- * 若無網路（離線），可退回使用資料集中已知山峰高程做粗略估計。
+ * 4. 天際線（山體輪廓）：在圖磚上沿 720 條射線逐像素掃描。
  */
 (function (global) {
   'use strict';
@@ -132,6 +132,45 @@
     return { w, h, data };
   }
 
+  /**
+   * 去除單點雜訊。Terrarium 在部分海岸線有資料雜訊：一個像素突然 +2500 m、
+   * 隔壁 −800 m（基隆港附近就有）。這種尖刺在天際線上會變成一根不存在的高峰，
+   * 路徑分析也會被它「擋住」。
+   *
+   * 判定：8 個鄰居中有超過一半比它低（或高）超過 thr，就換成鄰居的中位數。
+   * thr 取 max(200 m, 1.5 像素寬) —— 相當於比四周陡 56° 以上，真實山頭
+   * 在這個解析度下不會這樣（稜線上至少有兩個鄰居跟它差不多高）。
+   * 判定用原始值、寫到新陣列，成群的尖刺也不會互相掩護。
+   */
+  function despikeTile(t, pixelM) {
+    const { w, h, data: D } = t;
+    const thr = Math.max(200, 1.5 * pixelM);
+    const out = new Float32Array(D);
+    const nb = new Float32Array(8);
+    for (let y = 0; y < h; y++) {
+      const ym = y > 0 ? y - 1 : y, yp = y < h - 1 ? y + 1 : y;
+      for (let x = 0; x < w; x++) {
+        const xm = x > 0 ? x - 1 : x, xp = x < w - 1 ? x + 1 : x;
+        const c = D[y * w + x];
+        nb[0] = D[ym * w + xm]; nb[1] = D[ym * w + x]; nb[2] = D[ym * w + xp];
+        nb[3] = D[y * w + xm]; nb[4] = D[y * w + xp];
+        nb[5] = D[yp * w + xm]; nb[6] = D[yp * w + x]; nb[7] = D[yp * w + xp];
+        let hi = 0, lo = 0;
+        for (let i = 0; i < 8; i++) { if (nb[i] >= c - thr) hi++; if (nb[i] <= c + thr) lo++; }
+        if (hi >= 4 && lo >= 4) continue;     // 絕大多數像素：正常
+        nb.sort();
+        out[y * w + x] = hi < 4 ? nb[4] : nb[3];
+      }
+    }
+    return { w, h, data: out };
+  }
+
+  /** 圖磚中心緯度（算像素寬度用） */
+  function tileCenterLat(z, y) {
+    const n = Math.PI * (1 - (2 * (y + 0.5)) / Math.pow(2, z));
+    return Geo.toDeg(Math.atan(Math.sinh(n)));
+  }
+
   function loadDemTile(z, x, y) {
     const key = z + '/' + x + '/' + y;
     let p = demTiles.get(key);
@@ -139,7 +178,8 @@
     p = (async () => {
       const res = await fetch(DEM_URL(z, x, y));
       if (!res.ok) throw new Error('DEM ' + res.status);
-      return decodeTerrariumPng(await res.arrayBuffer());
+      const t = await decodeTerrariumPng(await res.arrayBuffer());
+      return despikeTile(t, demPixelM(tileCenterLat(z, y), z));
     })();
     p.catch(() => demTiles.delete(key));   // 失敗的不要留著，下次可重試
     demTiles.set(key, p);
@@ -527,27 +567,242 @@
     }).sort((a, b) => a.az - b.az);
   }
 
+  // ---- 密集天際線：在 DEM 圖磚上沿射線逐像素掃描 -----------------------
+  // 舊做法每條射線只取 22 點、只看到 90 km、方位每 3.75° 一條：稜線頂常落在
+  // 兩個取樣點之間，與逐像素真值比對平均差 0.35–0.77°、最大 1.5–3.6°。
+  // 現在改成圖磚一次抓好，在本地沿每條射線「每個像素都看」：近處用高解析
+  // 圖磚、遠處用低解析圖磚，看到 150 km（從西部平原看中央山脈約 60–110 km），
+  // 方位每 0.5°。台中實測：平均差 0.008°、最大 0.12°，約 53 張圖磚 / 3.5 MB。
+  // 近環拉到 20 km 是因為前排丘陵（大坑、八卦山）多在 10–20 km，
+  // 用 z10 會把稜線削矮 0.3°；遠環用 z8 與 z9 精度相同但流量少三成。
+  const SKY_RINGS = [
+    { from: 100, to: 20000, z: 12 },      // 近：~35 m/像素
+    { from: 20000, to: 60000, z: 10 },    // 中：~140 m/像素
+    { from: 60000, to: 150000, z: 8 },    // 遠：~560 m/像素（100 km 外 0.5° 方位間距就有 870 m）
+  ];
+
+  /** 圖磚一個像素代表的地面公尺數（Web Mercator，隨緯度變小） */
+  function demPixelM(lat, z) {
+    return 40075016.686 * Math.cos(Geo.toRad(lat)) / (256 * Math.pow(2, z));
+  }
+
+  /**
+   * 列出涵蓋「以 center 為圓心、from～to 公尺環帶」所需的圖磚。
+   * 在圖磚座標上以局部平面近似判斷相交（150 km 內誤差約 1%，另留 3% 餘裕）。
+   */
+  function ringTiles(center, from, to, z) {
+    const c = tileCoord(center.lat, center.lng, z);
+    const unit = demPixelM(center.lat, z) * 256;            // 一張圖磚幾公尺
+    const rTo = (to / unit) * 1.03 + 0.01;
+    const rFrom = Math.max(0, (from / unit) * 0.97 - 0.01);
+    const n = Math.pow(2, z), out = [];
+    for (let ty = Math.floor(c.y - rTo); ty <= Math.floor(c.y + rTo); ty++) {
+      if (ty < 0 || ty >= n) continue;
+      for (let tx = Math.floor(c.x - rTo); tx <= Math.floor(c.x + rTo); tx++) {
+        const nx = Math.max(tx, Math.min(tx + 1, c.x)) - c.x;      // 圖磚上離圓心最近的點
+        const ny = Math.max(ty, Math.min(ty + 1, c.y)) - c.y;
+        const fx = Math.max(Math.abs(tx - c.x), Math.abs(tx + 1 - c.x)); // 最遠的角
+        const fy = Math.max(Math.abs(ty - c.y), Math.abs(ty + 1 - c.y));
+        if (Math.hypot(nx, ny) <= rTo && Math.hypot(fx, fy) >= rFrom) {
+          out.push({ z, x: ((tx % n) + n) % n, y: ty });
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 準備射線掃描：所有射線共用同一組距離刻度，sin/cos 先算好。
+   *
+   * @param o.observer {lat,lng}
+   * @param o.obsAlt   觀測者眼睛海拔 (m)
+   * @param o.azimuths 方位數（720 = 每 0.5°）
+   * @param o.rings    [{from, to, step}]：各距離環帶與其取樣間距 (m)
+   * @param o.sample   (sinLat, lngDeg, ringIndex) => 海拔 (m) 或 null
+   * @param o.k        等效地球半徑係數（預設可見光 1.13）
+   * @param o.bpMin    遮擋斷點的最小仰角增幅 (deg)，越大存得越少
+   */
+  function prepareMarch(o) {
+    const k = o.k || K_OPTICAL, R = Geo.R_EARTH;
+    const dist = [], ring = [];
+    o.rings.forEach((r, ri) => {
+      const last = ri === o.rings.length - 1;
+      for (let d = r.from; last ? d <= r.to + 1e-6 : d < r.to; d += r.step) { dist.push(d); ring.push(ri); }
+    });
+    const n = dist.length;
+    const sinD = new Float64Array(n), cosD = new Float64Array(n), drop = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const dl = dist[i] / R;
+      sinD[i] = Math.sin(dl); cosD[i] = Math.cos(dl);
+      drop[i] = (dist[i] * dist[i]) / (2 * k * R);   // 地球曲率造成的下沉
+    }
+    const phi = Geo.toRad(o.observer.lat);
+    return {
+      azimuths: o.azimuths, obsAlt: o.obsAlt, sample: o.sample,
+      bpMin: o.bpMin != null ? o.bpMin : 0.05,
+      // 腳邊的平地仰角會從 -2° 一路爬到 0°，每一小步都記的話斷點一半是廢的；
+      // 500 m 內的遮擋併到第一筆斷點裡記（只是不細分距離）。
+      bpFrom: o.bpFrom != null ? o.bpFrom : 500,
+      dist, ring, sinD, cosD, drop, n, sp1: Math.sin(phi), cp1: Math.cos(phi), lng1: o.observer.lng,
+    };
+  }
+
+  /**
+   * 掃描第 ai 條射線，回傳該方位的稜線與「遮擋斷點」。
+   *
+   * 斷點 bp = [d1, e1, d2, e2, …]：沿射線往外走，「到目前為止的最高仰角」
+   * 每上升 bpMin 度記一筆。查「距離 D 之前最高的地形仰角」只要找 D 之前的
+   * 最後一筆 —— 用來判斷某座山是不是被更近的稜線擋住。
+   */
+  function marchRay(c, ai) {
+    const az = (360 / c.azimuths) * ai;
+    const th = Geo.toRad(az), st = Math.sin(th), ct = Math.cos(th);
+    const toDeg = 180 / Math.PI;
+    let best = -Infinity, bestI = -1, bestG = null, got = 0, lastBp = -Infinity;
+    const bp = [];
+    const rec = (d, t) => {
+      const e = Math.atan(t) * toDeg;
+      bp.push(Math.round(d), Math.round(e * 1000) / 1000); lastBp = e;
+    };
+    for (let i = 0; i < c.n; i++) {
+      // 大圓公式求這一點的緯度（只需 sin）與經度
+      const sp2 = c.sp1 * c.cosD[i] + c.cp1 * c.sinD[i] * ct;
+      const lng = c.lng1 + Math.atan2(st * c.sinD[i] * c.cp1, c.cosD[i] - c.sp1 * sp2) * toDeg;
+      const g = c.sample(sp2, lng, c.ring[i]);
+      if (g == null || !isFinite(g)) continue;
+      got++;
+      const d = c.dist[i];
+      if (d >= c.bpFrom && lastBp === -Infinity && bestI >= 0) rec(d, best);   // 第一筆：腳邊累積的遮擋
+      // 比切線斜率即可（與仰角單調對應），只有創新高時才算 atan
+      const t = (g - c.obsAlt - c.drop[i]) / d;
+      if (t > best) {
+        best = t; bestI = i; bestG = g;
+        if (d >= c.bpFrom && Math.atan(t) * toDeg - lastBp >= c.bpMin) rec(d, t);
+      }
+    }
+    if (bestI < 0) return { point: { az, elev: null, dist: null, ground: null }, bp: [], got };
+    const elev = Math.atan(best) * toDeg;
+    const dBest = Math.round(c.dist[bestI]);
+    if (elev - lastBp > 1e-6) bp.push(dBest, Math.round(elev * 1000) / 1000);   // 稜線本身一定要記
+    return { point: { az, elev, dist: c.dist[bestI], ground: bestG }, bp, got };
+  }
+
+  /** 同步版：一次掃完所有方位（純函式，測試用；App 用 computeSkyline 分段執行） */
+  function marchSkyline(o) {
+    const c = prepareMarch(o);
+    const points = [], bp = [];
+    for (let i = 0; i < o.azimuths; i++) {
+      const r = marchRay(c, i);
+      points.push(r.point); bp.push(r.bp);
+    }
+    return { points, bp, step: 360 / o.azimuths };
+  }
+
+  /** 建立圖磚取樣器：maps[ringIndex] 是 Map(x*1e5+y → 解好的圖磚) */
+  function makeDemSampler(rings, maps) {
+    let lastRi = -1, lastKey = -1, lastTile = null;
+    return (sinLat, lng, ri) => {
+      const nT = Math.pow(2, rings[ri].z);
+      const x = ((lng + 180) / 360) * nT;
+      const y = (1 - Math.atanh(Math.max(-0.9999, Math.min(0.9999, sinLat))) / Math.PI) / 2 * nT;
+      const tx = Math.floor(x), ty = Math.floor(y);
+      const key = tx * 1e5 + ty;
+      if (key !== lastKey || ri !== lastRi) {   // 相鄰取樣點多半落在同一張，省掉 Map 查詢
+        lastTile = maps[ri].get(key) || null; lastKey = key; lastRi = ri;
+      }
+      if (!lastTile) return null;
+      return Math.max(0, sampleTile(lastTile, (x - tx) * lastTile.w, (y - ty) * lastTile.h));
+    };
+  }
+
   /**
    * 取得觀測者四周的天際線輪廓，供 AR 畫出「沿著山形的山體形狀」。
-   *
-   * 取樣距離採等比（對數）間隔：近處密、遠處疏。天際線多半由近中距離的
-   * 稜線決定，等比間隔能用少得多的點數換到同樣的輪廓精度。
+   * 主要用 DEM 圖磚逐像素掃描（computeSkylineDem）；瀏覽器不支援或圖磚
+   * 完全抓不到時，退回舊的稀疏取樣（走 open-meteo 備援）。
    *
    * @param observer {lat,lng,alt}
    * @param opts.eyeHeight  觀測者離地高度 (m)，預設 2（站著的人）
-   * @param opts.azimuths   方位取樣數，預設 120（每 3°）
-   * @param opts.samples    每條射線的取樣點數，預設 28
-   * @param opts.maxRangeKm 最遠取樣距離，預設 90 km
-   * @param opts.minRangeM  最近取樣距離，預設 250 m
    * @param opts.onProgress (done, total) 進度回呼
-   * @returns { at:{lat,lng}, obsAlt, points:[{az, elev, dist, ground}] }
+   * @returns { at, obsAlt, ground, step, points:[{az, elev, dist, ground}], bp, coverage, error, source }
    */
   async function computeSkyline(observer, opts = {}) {
-    // 點數直接決定請求數（每 100 點一個請求），而 open-meteo 會限流，
-    // 所以取樣密度以「夠畫出輪廓」為準，不貪多：96×22 = 2112 點 ≈ 22 個請求。
+    let demErr = null;
+    if (opts.dem !== false && demSupported()) {
+      try { return await computeSkylineDem(observer, opts); }
+      catch (err) { demErr = err; }
+    }
+    try {
+      return await computeSkylineSparse(observer, opts);
+    } catch (err) {
+      throw demErr || err;
+    }
+  }
+
+  async function computeSkylineDem(observer, opts = {}) {
     const {
-      eyeHeight = 2, azimuths = 96, samples = 22,
-      maxRangeKm = 90, minRangeM = 250, k = K_OPTICAL,
+      eyeHeight = 2, azimuths = 720, maxRangeKm = 150, k = K_OPTICAL,
+      onProgress = null, rings: ringDefs = SKY_RINGS,
+    } = opts;
+    const maxM = maxRangeKm * 1000;
+    const rings = ringDefs.filter((r) => r.from < maxM).map((r) => ({
+      ...r, to: Math.min(r.to, maxM),
+      // 取樣間距 ≈ 0.8 像素：每個像素至少踩到一次，稜線頂不會漏掉
+      step: r.step || Math.max(15, demPixelM(observer.lat, r.z) * 0.8),
+    }));
+    const report = (f) => { if (onProgress) onProgress(Math.round(f * 1000), 1000); };
+
+    // 1) 抓這一圈要用的圖磚（6 條並行）
+    const jobs = [];
+    rings.forEach((r, ri) => ringTiles(observer, r.from, r.to, r.z).forEach((t) => jobs.push({ ...t, ri })));
+    const maps = rings.map(() => new Map());
+    let done = 0, next = 0, failed = 0, lastError = null;
+    const worker = async () => {
+      while (next < jobs.length) {
+        const j = jobs[next++];
+        try { maps[j.ri].set(j.x * 1e5 + j.y, await loadDemTile(j.z, j.x, j.y)); }
+        catch (e) { failed++; lastError = e; }
+        done++;
+        report(0.9 * done / jobs.length);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, jobs.length) }, worker));
+    if (failed === jobs.length) throw lastError || new Error('取不到地形圖磚');
+
+    // 2) 觀測點自己的地面高
+    const sample = makeDemSampler(rings, maps);
+    const g0 = sample(Math.sin(Geo.toRad(observer.lat)), observer.lng, 0);
+    const ground = g0 != null ? g0 : (observer.alt || 0);
+    const obsAlt = ground + eyeHeight;
+
+    // 3) 逐方位掃描；分段讓出主執行緒，畫面才不會卡住
+    const c = prepareMarch({ observer, obsAlt, azimuths, rings, k, sample });
+    const points = [], bp = [];
+    let complete = 0;
+    for (let i = 0; i < azimuths; i++) {
+      const r = marchRay(c, i);
+      points.push(r.point); bp.push(r.bp);
+      if (r.got === c.n) complete++;
+      if (i % 90 === 89) { report(0.9 + 0.1 * (i + 1) / azimuths); await sleep(0); }
+    }
+    if (!points.some((p) => p.elev != null)) throw lastError || new Error('取不到任何高程資料');
+    return {
+      at: { lat: observer.lat, lng: observer.lng }, obsAlt, ground, step: 360 / azimuths,
+      rangeKm: maxRangeKm, points, bp,
+      coverage: complete / azimuths,        // 資料完整的方位比例
+      error: failed ? lastError : null,     // 部分圖磚失敗時保留原因供提示
+      source: 'dem', tiles: jobs.length,
+    };
+  }
+
+  /**
+   * 備援：舊的稀疏取樣（等比距離、近密遠疏），透過 fetchElevations 取點，
+   * 圖磚抓不到時會落到 open-meteo。點數直接決定請求數（每 100 點一個），
+   * 而 open-meteo 會限流，所以只取「夠畫出輪廓」的量：96×22 ≈ 22 個請求。
+   */
+  async function computeSkylineSparse(observer, opts = {}) {
+    const {
+      eyeHeight = 2, sparseAzimuths: azimuths = 96, samples = 22,
+      sparseRangeKm: maxRangeKm = 90, minRangeM = 250, k = K_OPTICAL,
       onProgress = null, onRetry = null,
     } = opts;
     const maxRangeM = maxRangeKm * 1000;
@@ -598,10 +853,58 @@
     const got = points.filter((p) => p.elev != null).length;
     if (!got) throw (lastError || new Error('取不到任何高程資料'));
     return {
-      at: { lat: observer.lat, lng: observer.lng }, obsAlt, points,
+      at: { lat: observer.lat, lng: observer.lng }, obsAlt, ground: centerGround,
+      step: 360 / azimuths, rangeKm: maxRangeKm, points,
       coverage: got / points.length,      // 實際取到的方位比例
       error: lastError,                   // 部分失敗時保留原因供提示
+      source: 'sparse',
     };
+  }
+
+  /**
+   * 某方位的天際線仰角（度），相鄰兩個方位線性內插；沒有資料回傳 null。
+   * points 一律是等間隔方位（第 i 筆 = i × step 度），直接用索引查，不必搜尋。
+   */
+  function skylineElevAt(sl, az) {
+    const pts = sl && sl.points;
+    if (!pts || !pts.length) return null;
+    const n = pts.length, step = sl.step || 360 / n;
+    const f = ((((az % 360) + 360) % 360) / step);
+    const i0 = Math.floor(f) % n, i1 = (i0 + 1) % n, t = f - Math.floor(f);
+    const a = pts[i0] && pts[i0].elev, b = pts[i1] && pts[i1].elev;
+    if (a == null) return b == null ? null : b;
+    if (b == null) return a;
+    return a + (b - a) * t;
+  }
+
+  /**
+   * 往 az 方位看，距離 dist 之前「最高的地形仰角」（度）。
+   * 用天際線的遮擋斷點查；舊資料沒有斷點時回傳 null（無法判斷）。
+   */
+  function skylineBlockAt(sl, az, dist) {
+    const bps = sl && sl.bp;
+    if (!bps || !bps.length) return null;
+    const n = bps.length, step = sl.step || 360 / n;
+    const b = bps[Math.round((((az % 360) + 360) % 360) / step) % n];
+    if (!b || !b.length) return null;
+    let e = null;
+    for (let j = 0; j < b.length; j += 2) {
+      if (b[j] < dist) e = b[j + 1]; else break;
+    }
+    return e;
+  }
+
+  /**
+   * 目標是否被更近的稜線擋住（看不到）。
+   * 目標自己的山坡不算：只看目標前方 max(150m, 2%) 以外的地形。
+   *
+   * @param elev 從同一觀測高度（sl.obsAlt）看目標頂的仰角（度）
+   * @returns true=被擋、false=看得到、null=資料不足無法判斷
+   */
+  function skylineHides(sl, az, dist, elev, tol = 0.05) {
+    const block = skylineBlockAt(sl, az, dist - Math.max(150, dist * 0.02));
+    if (block == null) return null;
+    return block > elev + tol;
   }
 
   /**
@@ -642,6 +945,8 @@
   global.Elevation = {
     fetchElevations, elevationAt, buildProfile, analyzePath, deygoutLossDb,
     computeCoveragePolygon, computeSkyline, skylineFromRays, skylinePeaks,
+    skylineElevAt, skylineBlockAt, skylineHides,
+    marchSkyline, ringTiles, demPixelM, despikeTile, SKY_RINGS,
     K_OPTICAL,
     // DEM 圖磚
     decodeTerrarium, decodeTerrariumPng, tileCoord, pickZoom, demElevations,

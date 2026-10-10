@@ -11,7 +11,8 @@ require('../js/sky.js');
 require('../js/groups.js');
 globalThis.satellite = require('../vendor/satellite/satellite.min.js');
 require('../js/sats.js');
-const { Geo, Elevation, Parse, Sky, Groups, Sats } = globalThis;
+require('../js/ar.js');
+const { Geo, Elevation, Parse, Sky, Groups, Sats, ARView } = globalThis;
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -529,9 +530,143 @@ async function runParseTests() {
     const sv = await Elevation.fetchElevations([{ lat: 22.0, lng: 119.0 }]);
     ok('海底 −150m 夾為 0m', sv[0] === 0);
 
+    // 去雜訊：海岸線上的單點尖刺（實際圖磚就有 +2567m 夾在 −792m 旁邊）
+    {
+      const W = 7, d = new Float32Array(W * W).fill(100);
+      d[3 * W + 3] = 2600;                       // 孤立尖刺
+      d[1 * W + 1] = 1400; d[1 * W + 2] = 2500;  // 成對尖刺
+      const out = Elevation.despikeTile({ w: W, h: W, data: d }, 35).data;
+      ok('despike：孤立尖刺被壓回四周高度', approx(out[3 * W + 3], 100, 1));
+      ok('despike：成對尖刺也壓得掉', out[1 * W + 1] < 200 && out[1 * W + 2] < 200);
+      // 一道陡稜線（35m 像素、兩側每格掉 80 m ≈ 66°）與稜線上的山頭
+      const r = new Float32Array(W * W).fill(1300);
+      for (let x = 0; x < W; x++) { r[2 * W + x] = 1420; r[3 * W + x] = 1500; r[4 * W + x] = 1420; }
+      r[3 * W + 3] = 1580;
+      const ro = Elevation.despikeTile({ w: W, h: W, data: r }, 35).data;
+      ok('despike：陡稜線與稜線上的山頭不受影響',
+        ro[3 * W + 3] === 1580 && ro[3 * W + 0] === 1500 && ro[2 * W + 2] === 1420);
+    }
+
+    // computeSkyline 走 DEM：每張圖磚都是 500m 高台
+    {
+      const flat500 = makePng(256, 256, () => 500);
+      let tiles = 0;
+      global.fetch = async (url) => {
+        if (!/elevation-tiles-prod/.test(url)) return { ok: false, status: 500, headers: { get: () => null } };
+        tiles++;
+        return { ok: true, status: 200, arrayBuffer: async () => flat500.buffer.slice(flat500.byteOffset, flat500.byteOffset + flat500.length) };
+      };
+      Elevation.setDemEnabled(true);
+      Elevation._cache.clear(); Elevation._demTiles.clear();
+      let lastPct = 0;
+      const sl = await Elevation.computeSkyline({ lat: 24.1, lng: 120.7 }, {
+        eyeHeight: 3, onProgress: (d, n) => { lastPct = d / n; },
+      });
+      ok('DEM 天際線：720 個方位、每 0.5°', sl.points.length === 720 && sl.step === 0.5 && sl.source === 'dem');
+      ok('DEM 天際線：觀測高度 = 地面 500 + 眼高 3', approx(sl.obsAlt, 503, 0.01));
+      ok('DEM 天際線：資料完整、進度跑到 100%', sl.coverage === 1 && lastPct === 1);
+      ok('DEM 天際線：圖磚數合理（< 80，不超過記憶體快取）', tiles > 20 && tiles < 80 && sl.tiles === tiles);
+      // 高台上眼高 3m：最遠的「地平線」約在 √(2kR·3) ≈ 6.5 km，仰角 ≈ −0.06°
+      ok('DEM 天際線：平地的天際線略低於水平', sl.points.every((p) => p.elev < 0 && p.elev > -0.2));
+      ok('DEM 天際線：附遮擋斷點', Array.isArray(sl.bp) && sl.bp.length === 720);
+
+      // 圖磚全部抓不到 → 退回稀疏取樣（open-meteo）
+      global.fetch = async (url) => {
+        if (/elevation-tiles-prod/.test(url)) return { ok: false, status: 403 };
+        const k = new URL(url).searchParams.get('latitude').split(',').length;
+        return { ok: true, json: async () => ({ elevation: Array(k).fill(80) }) };
+      };
+      Elevation._cache.clear(); Elevation._demTiles.clear();
+      const sp = await Elevation.computeSkyline({ lat: 23.5, lng: 120.5 }, { eyeHeight: 2, maxRetry: 0 });
+      ok('圖磚失敗 → 退回稀疏取樣（96 方位）', sp.source === 'sparse' && sp.points.length === 96 && sp.step === 3.75);
+    }
+
     global.fetch = savedFetch;
     Elevation._cache.clear(); Elevation._demTiles.clear();
     Elevation.setDemEnabled(false);
+  }
+
+  console.log('elevation — 密集天際線掃描（合成地形）');
+  {
+    // 平地上一座高斯山：正東 20 km、高 2000 m、半寬 ~1 km
+    const obs = { lat: 24.0, lng: 121.0 };
+    const peak = Geo.destination(obs, 90, 20000);
+    const sample = (sinLat, lng) => {
+      const d = Geo.distance(peak, { lat: Math.asin(sinLat) * 180 / Math.PI, lng });
+      return 2000 * Math.exp(-(d * d) / (2 * 1000 * 1000));
+    };
+    const sl = Elevation.marchSkyline({
+      observer: obs, obsAlt: 10, azimuths: 360, k: Elevation.K_OPTICAL, sample,
+      rings: [{ from: 100, to: 10000, step: 30 }, { from: 10000, to: 60000, step: 100 }],
+    });
+    const east = sl.points[90];
+    const drop = 20000 * 20000 / (2 * Elevation.K_OPTICAL * Geo.R_EARTH);
+    const expect = Math.atan((2000 - 10 - drop) / 20000) * 180 / Math.PI;
+    ok('合成山：稜線落在 ~20 km', Math.abs(east.dist - 20000) < 400);
+    ok('合成山：稜線仰角 ≈ 理論值 (5.6°)', approx(east.elev, expect, 0.05));
+    // 平地：最高點在 √(2kR·10) ≈ 12 km，仰角約 −0.095°
+    ok('平地方位：仰角約 −0.1°（地球曲率）', approx(sl.points[270].elev, -0.0955, 0.01));
+    ok('step = 1°', sl.step === 1);
+
+    const top = (d, h) => Math.atan((h - 10 - d * d / (2 * Elevation.K_OPTICAL * Geo.R_EARTH)) / d) * 180 / Math.PI;
+    ok('山後 40 km 的 2000 m 目標被擋住', Elevation.skylineHides(sl, 90, 40000, top(40000, 2000)) === true);
+    ok('山前 10 km 的 500 m 目標沒被擋', Elevation.skylineHides(sl, 90, 10000, top(10000, 500)) === false);
+    ok('山頂本身不算被自己的山坡擋住', Elevation.skylineHides(sl, 90, 20000, top(20000, 2000)) === false);
+    ok('平地方位 30 km 外的 100 m 目標看得到', Elevation.skylineHides(sl, 270, 30000, top(30000, 100)) === false);
+    ok('舊版輪廓（無斷點）→ 無法判斷回傳 null',
+      Elevation.skylineHides({ points: sl.points, step: 1 }, 90, 40000, 0) === null);
+
+    // 等間隔方位內插、跨 0°/360° 接縫
+    const pts = [];
+    for (let i = 0; i < 720; i++) pts.push({ az: i * 0.5, elev: i === 0 ? 2 : (i === 719 ? 1 : 0) });
+    const S = { points: pts, step: 0.5 };
+    ok('skylineElevAt 落在取樣點上', Elevation.skylineElevAt(S, 0) === 2);
+    ok('skylineElevAt 跨接縫內插 (359.75° → 1.5)', approx(Elevation.skylineElevAt(S, 359.75), 1.5, 1e-9));
+    ok('skylineElevAt 負方位也能用', approx(Elevation.skylineElevAt(S, -0.25), 1.5, 1e-9));
+    ok('skylineElevAt 舊版 96 方位（無 step）', approx(Elevation.skylineElevAt(
+      { points: Array.from({ length: 96 }, (_, i) => ({ az: i * 3.75, elev: i })) }, 5.625), 1.5, 1e-9));
+
+    // ringTiles：環帶內任一點都要落在清單裡的圖磚上，且比整個方框少
+    const c = { lat: 24.1, lng: 120.7 };
+    const tl = Elevation.ringTiles(c, 20000, 60000, 10);
+    const set = new Set(tl.map((t) => t.x + '/' + t.y));
+    let miss = 0;
+    for (let i = 0; i < 2000; i++) {
+      const p = Geo.destination(c, Math.random() * 360, 20000 + Math.random() * 40000);
+      const q = Elevation.tileCoord(p.lat, p.lng, 10);
+      if (!set.has(Math.floor(q.x) + '/' + Math.floor(q.y))) miss++;
+    }
+    ok('ringTiles 涵蓋環帶內所有點', miss === 0);
+    const inner = Elevation.ringTiles(c, 100, 20000, 12).length;
+    ok('ringTiles 數量合理（近環 z12 ≤ 30 張）', inner > 4 && inner <= 30);
+  }
+
+  console.log('ar — 透視投影與相機視角');
+  {
+    const P = ARView.makeProjection;
+    const W = 390, H = 700;
+    const p0 = P(117, 0, 40, W, H);
+    const c0 = p0(117, 0);
+    ok('視線正中 → 畫面中心', approx(c0.x, W / 2, 1e-9) && approx(c0.y, H / 2, 1e-9));
+    ok('方位 +半視野 → 畫面右緣', approx(p0(137, 0).x, W, 1e-9));
+    ok('背後的方位不可見', p0(297, 0).front === false);
+    ok('水平垂直同比例尺（仰角 10° 在中心上方 f·tan10°）',
+      approx(H / 2 - p0(117, 10).y, p0.f * Math.tan(10 * Math.PI / 180), 1e-9));
+    const p1 = P(117, 12, 40, W, H);
+    ok('抬頭時地平線是一條水平直線', approx(p1(100, 0).y, p1.horizonY, 1e-9) && approx(p1(130, 0).y, p1.horizonY, 1e-9));
+    ok('抬頭 12° → 地平線在中心下方 f·tan12°', approx(p1.horizonY - H / 2, p1.f * Math.tan(12 * Math.PI / 180), 1e-9));
+    ok('垂直視野由長寬比推得', approx(p0.vfov, 2 * Math.atan(Math.tan(20 * Math.PI / 180) * H / W) * 180 / Math.PI, 1e-9));
+    // 舊版：預設 70° 線性投影；相機實際約 40° 透視。偏 15° 的山差了一大截
+    const lin = W / 2 + (15 / 35) * (W / 2), persp = p0(132, 0).x;
+    ok('舊預設（70° 線性）與相機（40° 透視）在偏 15° 處差 >50px', persp - lin > 50);
+
+    const hf = ARView.camDisplayHfov(480, 640, W, H, 68);
+    ok('直拿手機 4:3 串流 → 畫面視角約 40°', hf > 37 && hf < 44);
+    const hf169 = ARView.camDisplayHfov(720, 1280, W, H, 68);
+    ok('直拿手機 16:9 串流 → 同樣約 40°（長邊視角相同）', approx(hf169, hf, 2));
+    ok('橫拿 4:3 串流塞滿寬螢幕 → 約等於鏡頭長邊視角', approx(ARView.camDisplayHfov(640, 480, 844, 390, 68), 68, 0.5));
+    ok('鏡頭視角 ⇄ 畫面視角可互推',
+      approx(ARView.camLongFov(480, 640, W, H, ARView.camDisplayHfov(480, 640, W, H, 71)), 71, 1e-9));
   }
 
   console.log('sats — 多衛星追蹤（TLE + SGP4）');
