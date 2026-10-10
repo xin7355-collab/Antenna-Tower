@@ -31,6 +31,8 @@
       showSat: false,   // 衛星（ISS）
       showConstellations: true, // 星座連線（北斗七星等）
       hiddenGroups: [], // 被隱藏的群組 id
+      declination: -4.5, // 磁偏角（°，東偏為正）；羅盤讀到的是磁北，台灣約 -4.5
+      hfov: 70,         // AR 水平視野角（°），開相機時可用雙指縮放校正
     },
   };
 
@@ -411,7 +413,8 @@
       const dist = Geo.distance(state.me, target);
       const obsAlt = (state.me.alt || 0) + (state.me.antenna || 0);
       const tgtTop = Geo.targetTopAlt(target, state.settings.tgtAntenna);
-      const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, state.settings.withCurvature, state.settings.k);
+      // 顯示/對準用光學等效地球半徑，跟 AR 標籤與山稜線一致（分析仍用 4/3）
+      const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, state.settings.withCurvature, Elevation.K_OPTICAL);
       arView.lookAt(brg, Math.max(0, elev));
       if (aimEl) aimEl.innerHTML =
         `🎯 <b>${target.name}</b>：AR 中往 <b>方位 ${Math.round(brg)}° ${Geo.compass8(brg)}</b>、` +
@@ -733,6 +736,8 @@
     chk('opt-sat', !!state.settings.showSat);
     chk('opt-constel', !!state.settings.showConstellations);
     set('opt-clickadds', state.settings.mapClickAdds || 'station');
+    set('opt-decl', state.settings.declination != null ? state.settings.declination : -4.5);
+    set('opt-hfov', state.settings.hfov || 70);
     skyTicker();
     satTicker();
   }
@@ -745,8 +750,27 @@
     if (!live && skyTimer) { clearInterval(skyTimer); skyTimer = null; }
   }
 
-  // 衛星（ISS）：每 5 秒抓即時位置換算方位/仰角
+  // 衛星（ISS）：定時抓即時位置換算方位/仰角。
+  // ISS 一天只過境幾次、一次幾分鐘，其餘時間都在地平線下 ——
+  // 所以地平線下時用連續兩筆位置推算「下次過境時間」（Sky.predictPasses），
+  // 否則打開衛星永遠只看得到「在地平線下」，像壞掉一樣。
   let satTimer = null, satJustOn = false;
+  let satPrev = null;        // 上一筆 ISS 位置 {lat,lng,altKm,t}
+  let satPred = null;        // { at, me:{lat,lng}, passes:[...] }
+  let satWasUp = null;       // 上一刻是否在地平線上（升起偵測用）
+
+  function nextPassText(now) {
+    if (!satPred) return '';
+    const upcoming = satPred.passes.filter((x) => x.end > now);
+    // 擦邊過境（最高仰角幾度）實際上看不到，優先報仰角夠高的場次
+    const p = upcoming.find((x) => x.maxEl >= 10) || upcoming[0];
+    if (!p) return '；未來 12 小時內無過境';
+    const hhmm = new Date(p.start).toTimeString().slice(0, 5);
+    const mins = Math.round((p.start - now) / 60000);
+    const rel = mins <= 1 ? '即將升起' : mins < 90 ? `約 ${mins} 分鐘後` : `約 ${(mins / 60).toFixed(1)} 小時後`;
+    return `；下次過境約 ${hhmm}（${rel}，最高仰角 ${Math.round(p.maxEl)}°、方位 ${Math.round(p.maxAz)}° ${Geo.compass8(p.maxAz)}）`;
+  }
+
   async function fetchISS() {
     try {
       const r = await fetch('https://api.wheretheiss.at/v1/satellites/25544');
@@ -758,16 +782,38 @@
         az: la.az, alt: la.el, rangeKm: la.rangeKm,
         subLat: j.latitude, subLng: j.longitude,
       }];
-      // 狀態提示：即使在地平線下也告訴使用者它在哪
+
+      // 維護過境預測：預測太舊、觀測點移動很遠、或上一批過境都結束了才重算
+      const cur = { lat: j.latitude, lng: j.longitude, altKm: j.altitude,
+        t: j.timestamp ? j.timestamp * 1000 : Date.now() };
+      const now = Date.now();
+      const stale = !satPred || (now - satPred.at) > 30 * 60000 ||
+        Geo.distance(satPred.me, state.me) > 50000 ||
+        !satPred.passes.some((p) => p.end > now);
+      if (satPrev && satPrev.t < cur.t && stale) {
+        satPred = {
+          at: now, me: { lat: state.me.lat, lng: state.me.lng },
+          passes: Sky.predictPasses(satPrev, cur, state.me, { hours: 12 }),
+        };
+      }
+      satPrev = cur;
+
+      const isUp = la.el >= 0;
       if (state.settings.showSat) {
-        if (la.el >= 0) {
+        if (isUp) {
           setSkyHint(`🛰 ISS 在地平線上！往 方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}° 看（距離 ${Math.round(la.rangeKm)} km）`);
-          if (satJustOn) { showARTab(); if (arView) arView.lookAt(la.az, Math.max(0, la.el)); satJustOn = false; }
+          if (satJustOn || satWasUp === false) {
+            showARTab();
+            if (arView) arView.lookAt(la.az, Math.max(0, la.el));
+            if (satWasUp === false && global.UI) UI.toast('🛰 ISS 升起了！AR 已轉向它', 'ok', 5000);
+            satJustOn = false;
+          }
         } else {
-          setSkyHint(`🛰 ISS 目前在地平線下（方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}°）——過境時才看得到；地圖上有它現在的地表位置`);
+          setSkyHint(`🛰 ISS 目前在地平線下（方位 ${Math.round(la.az)}° ${Geo.compass8(la.az)}、仰角 ${la.el.toFixed(0)}°）${nextPassText(now)}`);
           satJustOn = false;
         }
       }
+      satWasUp = isUp;
       if (mapView.setSatellite) mapView.setSatellite({ lat: j.latitude, lng: j.longitude, name: '🛰 ISS', alt: la.el });
     } catch (_) {
       state.satellites = [];
@@ -780,6 +826,7 @@
     // 分頁切到背景時直接跳過，不必在使用者沒看的時候一直抓。
     if (state.settings.showSat && !satTimer) {
       satJustOn = true; fetchISS();
+      setTimeout(() => { if (state.settings.showSat) fetchISS(); }, 3000); // 第二筆，過境預測需要兩筆
       satTimer = setInterval(() => { if (!document.hidden) fetchISS(); }, 10000);
     }
     if (!state.settings.showSat && satTimer) {
@@ -824,6 +871,17 @@
         faceBestSky();
       }
       render();
+    };
+
+    // AR 校正：磁偏角 / 視野
+    document.getElementById('opt-decl').onchange = (e) => {
+      const v = parseFloat(e.target.value);
+      state.settings.declination = isFinite(v) ? v : -4.5;
+      saveState();
+    };
+    document.getElementById('opt-hfov').onchange = (e) => {
+      const v = parseFloat(e.target.value);
+      if (isFinite(v)) { arView.setFov(v); state.settings.hfov = Math.round(arView.hfov); e.target.value = state.settings.hfov; saveState(); }
     };
 
     // 山體輪廓
@@ -1045,6 +1103,12 @@
   // ---- 地圖回呼 ----------------------------------------------------------
   const handlers = {
     onSelect: (id) => select(id),
+    onFov: (v) => {
+      state.settings.hfov = Math.round(v);
+      saveState();
+      const el = document.getElementById('opt-hfov');
+      if (el) el.value = state.settings.hfov;
+    },
     onMove: (id, lat, lng) => {
       const ent = findEntity(id);
       if (!ent) return;
@@ -1082,6 +1146,7 @@
       if (el) el.innerHTML = `<div class="map-fallback">⚠️ 地圖元件未載入（${err.message}）<br>AR 視角與路徑分析仍可使用。</div>`;
     }
     arView = new ARView('view-ar', handlers);
+    if (state.settings.hfov && state.settings.hfov !== 70) arView.setFov(state.settings.hfov);
     bindControls();
     render();
     // 沿用上次存下來的輪廓時要講清楚，免得以為是這次算的

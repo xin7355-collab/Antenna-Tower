@@ -14,8 +14,11 @@
   'use strict';
 
   const Geo = global.Geo;
-  const HFOV = 70;   // 水平視野角 (deg)
-  const VFOV = 100;  // 垂直視野角 (deg)
+  const HFOV_DEFAULT = 70;    // 水平視野角預設值 (deg)；實際值在 this.hfov，可校正
+  const VFOV_RATIO = 100 / 70; // 垂直視野角與水平的比例（維持原本 70:100 的縱向誇大）
+  // AR 疊加畫面「顯示」用的等效地球半徑：可見光 ≈1.13，與山稜線一致。
+  // 無線電分析（遮蔽/連結預算）仍用設定裡的 4/3，兩者差異 <0.2°。
+  const K_DISPLAY = (global.Elevation && global.Elevation.K_OPTICAL) || 1.13;
   // 可抬頭/低頭的範圍。上限必須到 90°（天頂）——星座常在 60° 以上
   // （獵戶座可到 70 幾度），上限訂在 60° 的話手機根本轉不過去。
   const PITCH_MAX = 90, PITCH_MIN = -60;
@@ -58,6 +61,9 @@
       this.root = document.getElementById(rootId);
       this.heading = 315;  // 初始朝西北
       this.pitch = 6;      // 略微抬頭
+      this.hfov = HFOV_DEFAULT;
+      this.vfov = HFOV_DEFAULT * VFOV_RATIO;
+      this._pinch = null;  // 雙指縮放校正視野中
       this.state = null;
       this.usingSensor = false;
       this._paintPending = false;  // rAF 節流用
@@ -109,8 +115,8 @@
         moved = Math.max(moved, Math.hypot(x - drag.x, y - drag.y));
         if (this.usingSensor) return;
         const w = this.root.clientWidth, hgt = this.root.clientHeight;
-        this.heading = (drag.h - ((x - drag.x) / w) * HFOV + 360) % 360;
-        this.pitch = clampPitch(drag.p + ((y - drag.y) / hgt) * VFOV);
+        this.heading = (drag.h - ((x - drag.x) / w) * this.hfov + 360) % 360;
+        this.pitch = clampPitch(drag.p + ((y - drag.y) / hgt) * this.vfov);
         this._paint();
       };
       const up = (x, y) => {
@@ -120,15 +126,39 @@
       this.root.addEventListener('mousedown', (e) => { if (isUI(e)) return; down(e.clientX, e.clientY); });
       window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
       window.addEventListener('mouseup', (e) => up(e.clientX, e.clientY));
+      const pinchDist = (e) => Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY);
       this.root.addEventListener('touchstart', (e) => {
         if (isUI(e)) return;
+        if (e.touches.length >= 2) {
+          // 第二指按下 → 進入視野校正，取消單指拖曳
+          drag = null;
+          this._pinch = { d0: pinchDist(e), fov0: this.hfov };
+          return;
+        }
         const t = e.touches[0]; down(t.clientX, t.clientY);
       }, { passive: true });
       this.root.addEventListener('touchmove', (e) => {
+        if (this._pinch && e.touches.length >= 2) {
+          // 兩指拉開 = 放大（視野變窄）；捏合 = 縮小（視野變寬）。
+          // 開相機時用這個把標籤位置校正到與實景對齊。
+          const scale = this._pinch.d0 / pinchDist(e);
+          this.setFov(this._pinch.fov0 * scale);
+          this._showFovBadge();
+          return;
+        }
         if (!drag) return;
         const t = e.touches[0]; move(t.clientX, t.clientY);
       }, { passive: true });
       this.root.addEventListener('touchend', (e) => {
+        if (this._pinch) {
+          if (e.touches.length < 2) {
+            this._pinch = null;
+            if (this.h.onFov) this.h.onFov(this.hfov);   // 讓 app 存檔
+          }
+          return;
+        }
         if (!drag) return;
         const t = e.changedTouches[0]; up(t.clientX, t.clientY);
       });
@@ -163,6 +193,28 @@
 
     /** 供外部（切回 AR 分頁時）重新繪製 */
     repaint() { this._paint(); }
+
+    /** 設定水平視野角（40–110°），垂直依比例跟著變 */
+    setFov(deg) {
+      const v = Math.max(40, Math.min(110, Number(deg) || HFOV_DEFAULT));
+      if (v === this.hfov) return;
+      this.hfov = v;
+      this.vfov = v * VFOV_RATIO;
+      this._paint();
+    }
+
+    /** 雙指縮放時短暫顯示目前視野角 */
+    _showFovBadge() {
+      if (!this.$fovBadge) {
+        this.$fovBadge = document.createElement('div');
+        this.$fovBadge.className = 'ar-fov-badge';
+        this.root.appendChild(this.$fovBadge);
+      }
+      this.$fovBadge.textContent = `視野 ${Math.round(this.hfov)}°`;
+      this.$fovBadge.style.display = 'block';
+      clearTimeout(this._fovBadgeTimer);
+      this._fovBadgeTimer = setTimeout(() => { this.$fovBadge.style.display = 'none'; }, 1200);
+    }
 
     /**
      * 重繪排程：把同一個 animation frame 內的多次要求合併成一次。
@@ -288,6 +340,13 @@
       let hd = (typeof e.webkitCompassHeading === 'number' && isFinite(e.webkitCompassHeading))
         ? e.webkitCompassHeading
         : (e.alpha != null && isFinite(e.alpha) ? 360 - e.alpha : null);
+      // 磁偏角修正：感測器給的是「磁北」方位，AR 的目標方位都是「真北」。
+      // 台灣磁偏角約 -4.5°（西偏），不修正等於每個目標固定偏 4~5°。
+      if (hd != null) {
+        const decl = this.state && this.state.settings && isFinite(this.state.settings.declination)
+          ? Number(this.state.settings.declination) : -4.5;
+        hd = (hd + decl + 360) % 360;
+      }
       // 圓周低通濾波，減少羅盤抖動（以 sin/cos 分量平滑角度）
       const A = 0.25;
       if (hd != null) {
@@ -421,7 +480,7 @@
       const W = this.root.clientWidth;
 
       // 天空/地面：地平線隨俯仰角上下移動
-      const horizonY = H / 2 + (this.pitch / (VFOV / 2)) * (H / 2);
+      const horizonY = H / 2 + (this.pitch / (this.vfov / 2)) * (H / 2);
       this.$sky.style.height = `${horizonY}px`;
       this.root.querySelector('.ar-horizon').style.top = `${horizonY}px`;
       this.root.querySelector('.ar-ground').style.top = `${horizonY}px`;
@@ -430,8 +489,8 @@
 
       const angDiff = (a) => ((a - this.heading + 540) % 360) - 180;
       const obsAlt = (me.alt || 0) + (me.antenna || 0);
-      const projX = (az) => W / 2 + (angDiff(az) / (HFOV / 2)) * (W / 2);
-      const projY = (alt) => horizonY - ((alt - this.pitch) / (VFOV / 2)) * (H / 2);
+      const projX = (az) => W / 2 + (angDiff(az) / (this.hfov / 2)) * (W / 2);
+      const projY = (alt) => horizonY - ((alt - this.pitch) / (this.vfov / 2)) * (H / 2);
       let aim = null;
       const cand = [];
 
@@ -448,10 +507,10 @@
       const hidden = (st.settings && st.settings.hiddenGroups) || [];
       (global.Groups ? Groups.visible(land, hidden) : land).forEach((t) => {
         const brg = Geo.bearing(me, t);
-        if (Math.abs(angDiff(brg)) > HFOV / 2 + 4) return;
+        if (Math.abs(angDiff(brg)) > this.hfov / 2 + 4) return;
         const dist = Geo.distance(me, t);
         const tgtTop = Geo.targetTopAlt(t, st.settings.tgtAntenna);
-        const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, st.settings.withCurvature, st.settings.k);
+        const elev = Geo.elevationAngle(obsAlt, tgtTop, dist, st.settings.withCurvature, K_DISPLAY);
         const selected = t.id === st.selectedId;
         const a = st.analysisById[t.id];
         const status = a ? (a.clear ? 'ok' : a.losClear ? 'marg' : 'bad') : '';
@@ -483,7 +542,7 @@
           const cons = sky.cons;
           this._paintConstellations(cons, angDiff, projX, projY, W, H);
           cons.forEach((c) => {
-            if (c.label.alt < 0 || Math.abs(angDiff(c.label.az)) > HFOV / 2) return;
+            if (c.label.alt < 0 || Math.abs(angDiff(c.label.az)) > this.hfov / 2) return;
             cand.push({
               id: 'con-' + c.id, name: c.name, kind: 'sky-con', selected: false, stick: false,
               x: projX(c.label.az), y: projY(c.label.alt),
@@ -499,7 +558,7 @@
         }
         sky.objs.forEach((o) => {
           if (o.alt < -2) return;                        // 地平線下不畫
-          if (Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
+          if (Math.abs(angDiff(o.az)) > this.hfov / 2 + 4) return;
           const selected = o.id === st.selectedId;
           const pr = o.type === 'sun' || o.type === 'moon' ? 5e5 : o.type === 'planet' ? 2e5 : 1e5 - (o.mag || 0) * 1000;
           cand.push({
@@ -519,7 +578,7 @@
       // 1c) 衛星（如 ISS）— 獨立於天空開關
       if (st.satellites && st.satellites.length) {
         st.satellites.forEach((o) => {
-          if (o.alt < -2 || Math.abs(angDiff(o.az)) > HFOV / 2 + 4) return;
+          if (o.alt < -2 || Math.abs(angDiff(o.az)) > this.hfov / 2 + 4) return;
           const selected = o.id === st.selectedId;
           cand.push({
             id: o.id, name: o.name, kind: 'sky-sat', selected, stick: false,
@@ -540,7 +599,7 @@
       const clampX = (x) => Math.max(EDGE, Math.min(W - EDGE, x));
       cand.forEach((c) => {
         c.xl = clampX(c.x);
-        c.w = Math.max(textWidth(c.name, 14), textWidth(c.sub, 10)) + 8;
+        c.w = Math.max(textWidth(c.name, 15), textWidth(c.sub, 11)) + 16;
       });
       const placed = [];
       cand.sort((a, b) => b.prio - a.prio).forEach((c) => {
@@ -589,7 +648,7 @@
       const brg = Geo.bearing(me, target);
       const dist = Geo.distance(me, target);
       const obsAlt = (me.alt || 0) + (me.antenna || 0);
-      const elev = Geo.elevationAngle(obsAlt, Geo.targetTopAlt(target, st.settings.tgtAntenna), dist, st.settings.withCurvature, st.settings.k);
+      const elev = Geo.elevationAngle(obsAlt, Geo.targetTopAlt(target, st.settings.tgtAntenna), dist, st.settings.withCurvature, K_DISPLAY);
       const dAz = ((brg - this.heading + 540) % 360) - 180; // 正=目標在右
       const dEl = elev - this.pitch;                          // 正=需抬高
       const azOK = Math.abs(dAz) <= 3, elOK = Math.abs(dEl) <= 1;
@@ -612,8 +671,8 @@
       const ticks = [];
       for (let b = 0; b < 360; b += 15) {
         let d = ((b - this.heading + 540) % 360) - 180;
-        if (Math.abs(d) > HFOV / 2) continue;
-        const x = W / 2 + (d / (HFOV / 2)) * (W / 2);
+        if (Math.abs(d) > this.hfov / 2) continue;
+        const x = W / 2 + (d / (this.hfov / 2)) * (W / 2);
         const major = b % 45 === 0;
         const label = major ? Geo.compass8(b) : '';
         ticks.push(
@@ -674,7 +733,7 @@
 
       // 取視野內（含邊緣緩衝）的點，依畫面 x 由左到右排好
       const vis = pts
-        .filter((p) => p.elev != null && Math.abs(angDiff(p.az)) <= HFOV / 2 + 6)
+        .filter((p) => p.elev != null && Math.abs(angDiff(p.az)) <= this.hfov / 2 + 6)
         .map((p) => ({ ...p, x: projX(p.az), y: projY(p.elev) }))
         .sort((a, b) => a.x - b.x);
       if (vis.length < 2) { this.$skyline.innerHTML = ''; return; }
@@ -739,14 +798,14 @@
         c.segments.forEach((s) => {
           // 兩端都要在視野內且在地平線上，才畫這一段
           if (s.a.alt < -1 || s.b.alt < -1) return;
-          if (Math.abs(angDiff(s.a.az)) > HFOV / 2 + 10 && Math.abs(angDiff(s.b.az)) > HFOV / 2 + 10) return;
+          if (Math.abs(angDiff(s.a.az)) > this.hfov / 2 + 10 && Math.abs(angDiff(s.b.az)) > this.hfov / 2 + 10) return;
           parts.push(`<line x1="${projX(s.a.az).toFixed(1)}" y1="${projY(s.a.alt).toFixed(1)}" ` +
             `x2="${projX(s.b.az).toFixed(1)}" y2="${projY(s.b.alt).toFixed(1)}" ` +
-            `stroke="${stroke}" stroke-width="1.6" opacity="0.75"${dash}/>`);
+            `stroke="${stroke}" stroke-width="2" opacity="0.85"${dash}/>`);
         });
         c.stars.forEach((s) => {
-          if (s.alt < -1 || Math.abs(angDiff(s.az)) > HFOV / 2 + 4) return;
-          const r = Math.max(1.8, 4.2 - (s.mag || 2) * 0.7);
+          if (s.alt < -1 || Math.abs(angDiff(s.az)) > this.hfov / 2 + 4) return;
+          const r = Math.max(2.2, 4.8 - (s.mag || 2) * 0.7);
           parts.push(`<circle cx="${projX(s.az).toFixed(1)}" cy="${projY(s.alt).toFixed(1)}" ` +
             `r="${r.toFixed(1)}" fill="#eaf4ff" opacity="0.95"/>`);
         });
@@ -759,7 +818,7 @@
     _paintEcliptic(pts, angDiff, projX, projY, W, H) {
       let d = '', pen = false;
       pts.forEach((p) => {
-        if (Math.abs(angDiff(p.az)) < HFOV / 2 + 8 && p.alt > -20) {
+        if (Math.abs(angDiff(p.az)) < this.hfov / 2 + 8 && p.alt > -20) {
           const x = projX(p.az), y = projY(p.alt);
           d += (pen ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
           pen = true;

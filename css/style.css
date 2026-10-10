@@ -147,16 +147,23 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .arlbl-marg .arlbl-name { color: #ffd36b; }
 .arlbl-bad .arlbl-name { color: #ff9a9a; }
 .arlbl-sel .arlbl-name { color: #ffe27a; font-size: 16px; }
-/* 天文層標籤 */
+/* 天文層標籤：淺色字疊在亮天空上看不清楚，加半透明深色底、字級加大 */
+.arlbl-sky-sun .arlbl-name, .arlbl-sky-moon .arlbl-name, .arlbl-sky-planet .arlbl-name,
+.arlbl-sky-star .arlbl-name, .arlbl-sky-sat .arlbl-name, .arlbl-sky-con .arlbl-name {
+  display: inline-block; background: rgba(6,10,18,.62); padding: 1px 8px; border-radius: 999px; }
+.arlbl-sky-sun .arlbl-sub, .arlbl-sky-moon .arlbl-sub, .arlbl-sky-planet .arlbl-sub,
+.arlbl-sky-star .arlbl-sub, .arlbl-sky-sat .arlbl-sub {
+  display: inline-block; background: rgba(6,10,18,.5); padding: 0 7px; border-radius: 999px;
+  color: #e6edf5; font-size: 11px; margin-top: 1px; }
 .arlbl-sky-sun .arlbl-name { color: #ffdf6b; }
-.arlbl-sky-moon .arlbl-name { color: #eaf0f7; }
-.arlbl-sky-planet .arlbl-name { color: #ffb066; }
-.arlbl-sky-star .arlbl-name { color: #bcd4ff; font-size: 12px; font-weight: 600; }
-.arlbl-sky-sat .arlbl-name { color: #7dffcf; }
+.arlbl-sky-moon .arlbl-name { color: #f3f7fd; }
+.arlbl-sky-planet .arlbl-name { color: #ffbe7d; }
+.arlbl-sky-star .arlbl-name { color: #e3eeff; font-size: 13.5px; font-weight: 700; }
+.arlbl-sky-sat .arlbl-name { color: #8bffd8; }
 .arlbl-sky-planet .arlbl-name::before,
 .arlbl-sky-star .arlbl-name::before { content: '• '; opacity: .8; }
 .arlbl-marker .arlbl-name { color: #ffb3ea; }
-.arlbl-sky-con .arlbl-name { color: #9ad0ff; font-size: 11px; font-weight: 700; letter-spacing: .05em; opacity: .9; }
+.arlbl-sky-con .arlbl-name { color: #aedaff; font-size: 13px; font-weight: 700; letter-spacing: .05em; }
 /* 群組色點：站臺的通/繞/擋用名稱顏色，群組則靠這個小圓點區分 */
 .arlbl-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   margin-right: 4px; vertical-align: middle; box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
@@ -170,6 +177,11 @@ body { display: flex; flex-direction: column; background: #0e1116; color: #e8ecf
 .ar-constel { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
 .ar-readout .ro-meta { font-size: 12px; color: #b9c6d3; }
 .mini2 { align-self: end; background: #222a35; color: #cdd6df; border: 1px solid #333e4b; border-radius: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer; }
+
+.ar-fov-badge { position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+  background: rgba(8,12,18,.8); color: #ffe27a; border: 1px solid rgba(255,255,255,.25);
+  border-radius: 999px; padding: 4px 14px; font-size: 14px; font-weight: 700;
+  pointer-events: none; z-index: 5; display: none; }
 
 .ar-crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: rgba(255,255,255,.7); font-size: 26px; font-weight: 300; pointer-events: none; text-shadow: 0 1px 3px #000; }
 
@@ -225,6 +237,13 @@ body.ar-full-active { overflow: hidden; }
      版面因此跑掉。統一拉到 16px 就不會觸發。 */
   .panel input[type="text"], .panel input[type="number"],
   .panel input[type="datetime-local"], .panel select { font-size: 16px; }
+
+  /* 天空文字在手機上要再大一級才看得清楚 */
+  .arlbl-name { font-size: 15px; }
+  .arlbl-sub { font-size: 11px; }
+  .arlbl-sky-star .arlbl-name { font-size: 14.5px; }
+  .arlbl-sky-con .arlbl-name { font-size: 14px; }
+  .arlbl-sel .arlbl-name { font-size: 17px; }
 
   /* AR 讀數是照桌面尺寸設計的，在手機上會佔掉半個畫面、還會換行 */
   .ar-readout { bottom: 62px; max-width: 92%; }

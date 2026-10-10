@@ -183,6 +183,45 @@ async function runParseTests() {
   ok('衛星正上方 → 距離 ~420 km', approx(over.rangeKm, 420, 5));
   const north = Sky.lookAngles({ lat: 25, lng: 121, alt: 0 }, { lat: 28, lng: 121, altKm: 420 });
   ok('衛星偏北 → 方位 ~0°(北)', north.az < 3 || north.az > 357);
+  ok('lookAnglesEcef 與 lookAngles 一致', (() => {
+    const o = { lat: 23.5, lng: 120.8, alt: 100 };
+    const g = { lat: 25.2, lng: 122.1, altKm: 420 };
+    const a = Sky.lookAngles(o, g);
+    const b = Sky.lookAnglesEcef(o, Sky.geodeticToEcef(g.lat, g.lng, g.altKm * 1000));
+    return approx(a.az, b.az, 1e-9) && approx(a.el, b.el, 1e-9);
+  })());
+
+  console.log('sky — 衛星過境預測');
+  {
+    // 赤道圓軌道有解析解可對照：
+    // 軌道角速度 ω = √(μ/r³)，地面軌跡相對地表東移 ω − 地球自轉率。
+    const R_EQ = 6378137, H = 420000, r = R_EQ + H;
+    const wSat = Math.sqrt(3.986004418e14 / (r * r * r)) * 180 / Math.PI;  // °/s
+    const wRel = wSat - 360.9856 / 86400;                                   // 相對地表 °/s
+    const T0 = Date.UTC(2026, 9, 10, 0, 0, 0);
+    const obs = { lat: 0, lng: 121, alt: 0 };
+    // 衛星現在在觀測者西方 60°，往東飛 → 預計 60/wRel 秒後從頭頂通過
+    const mk = (dt) => ({ lat: 0, lng: 61 + wRel * dt, altKm: 420, t: T0 + dt * 1000 });
+    // 正頭頂通過時仰角在尖峰附近每秒變化數度，取樣細一點才能驗證最大仰角
+    const passes = Sky.predictPasses(mk(0), mk(10), obs, { hours: 2, stepS: 5 });
+    ok('找到過境', passes.length >= 1);
+    const p = passes[0];
+    const expectT = T0 + (60 / wRel) * 1000;
+    ok('過境最高點時間與解析解相符 (±60s)', Math.abs(p.maxT - expectT) < 60000);
+    ok('正頭頂通過 → 最大仰角 >85°', p.maxEl > 85);
+    // 仰角 0° 的覆蓋半角 = acos(R/r) ≈ 20.24° → 全程約 670 秒
+    const durS = (p.end - p.start) / 1000;
+    ok('過境時長 ~670s（500–800s）', durS > 500 && durS < 800);
+    ok('start < maxT < end', p.start <= p.maxT && p.maxT <= p.end);
+
+    // 觀測者緯度 25° > 赤道軌道覆蓋半角 20.24° → 永遠不過境
+    const far = Sky.predictPasses(mk(0), mk(10), { lat: 25, lng: 121, alt: 0 }, { hours: 6 });
+    ok('軌道覆蓋不到的緯度 → 無過境', far.length === 0);
+
+    ok('兩筆資料時間相同 → 回傳空陣列',
+      Sky.predictPasses(mk(0), mk(0), obs, { hours: 1 }).length === 0);
+    ok('缺資料 → 回傳空陣列', Sky.predictPasses(null, mk(10), obs).length === 0);
+  }
 
   console.log('groups — 群組分類與配色');
   {

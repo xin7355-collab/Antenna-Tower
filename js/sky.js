@@ -359,13 +359,11 @@
   }
 
   /**
-   * 從觀測者看目標（如衛星）的方位/仰角。
-   * @param obs {lat,lng,alt(m)}   @param tgt {lat,lng,altKm}
-   * @returns {az, el, rangeKm}
+   * 從觀測者看一個 ECEF 目標點的方位/仰角。
+   * @param obs {lat,lng,alt(m)}   @param t {x,y,z}（m，ECEF）
    */
-  function lookAngles(obs, tgt) {
+  function lookAnglesEcef(obs, t) {
     const o = geodeticToEcef(obs.lat, obs.lng, obs.alt || 0);
-    const t = geodeticToEcef(tgt.lat, tgt.lng, (tgt.altKm || 0) * 1000);
     const dx = t.x - o.x, dy = t.y - o.y, dz = t.z - o.z;
     const φ = obs.lat, λ = obs.lng;
     const e = -sin(λ) * dx + cos(λ) * dy;
@@ -379,10 +377,100 @@
     };
   }
 
+  /**
+   * 從觀測者看目標（如衛星）的方位/仰角。
+   * @param obs {lat,lng,alt(m)}   @param tgt {lat,lng,altKm}
+   * @returns {az, el, rangeKm}
+   */
+  function lookAngles(obs, tgt) {
+    return lookAnglesEcef(obs, geodeticToEcef(tgt.lat, tgt.lng, (tgt.altKm || 0) * 1000));
+  }
+
+  // ---- 衛星過境預測 ----------------------------------------------------
+  // ISS 每天只在頭頂經過幾次、一次幾分鐘，其餘時間都在地平線下。
+  // 「打開衛星卻什麼都沒看到」幾乎都是這個原因，所以要能回答
+  // 「下次什麼時候看得到」。做法：取兩個時刻的衛星位置（即時 API 本來
+  // 就每 10 秒抓一次），用圓軌道近似求出軌道面與角速度，往後推算每個
+  // 時刻的仰角，找出升起/最高/落下。不含 J2 攝動，12 小時內誤差約 1–3
+  // 分鐘，對「幾點抬頭看」足夠。純函式、可測試。
+
+  const MU_EARTH = 3.986004418e14;   // 地心重力常數 (m³/s²)
+
+  const vcross = (a, b) => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x });
+  const vdot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const vlen = (a) => Math.sqrt(vdot(a, a));
+  const vscale = (a, s) => ({ x: a.x * s, y: a.y * s, z: a.z * s });
+  const vnorm = (a) => vscale(a, 1 / vlen(a));
+
+  /** 繞單位軸 n̂ 旋轉 θ（rad）—— Rodrigues 公式 */
+  function vrotate(v, n, th) {
+    const c = Math.cos(th), s = Math.sin(th);
+    const cx = vcross(n, v), d = vdot(n, v);
+    return {
+      x: v.x * c + cx.x * s + n.x * d * (1 - c),
+      y: v.y * c + cx.y * s + n.y * d * (1 - c),
+      z: v.z * c + cx.z * s + n.z * d * (1 - c),
+    };
+  }
+
+  /** 繞 z 軸旋轉 θ（度）：ECEF ↔ 慣性系（經度差即格林威治恆星時） */
+  function rotZ(v, deg) {
+    const c = cos(deg), s = sin(deg);
+    return { x: v.x * c - v.y * s, y: v.x * s + v.y * c, z: v.z };
+  }
+
+  /**
+   * 預測衛星過境。
+   * @param s0,s1 兩個時刻的衛星位置 {lat,lng,altKm,t(ms)}，間隔幾秒到幾分鐘皆可
+   * @param obs   觀測者 {lat,lng,alt(m)}
+   * @param opts.hours  往後找幾小時（預設 12）
+   * @param opts.stepS  掃描間隔秒數（預設 30）
+   * @param opts.minEl  視為「可見」的最低仰角（度，預設 0）
+   * @param opts.maxPasses 最多回傳幾次過境（預設 3）
+   * @returns [{start, end, maxT (ms), maxEl, maxAz}]；資料不足回傳 []
+   */
+  function predictPasses(s0, s1, obs, opts = {}) {
+    const { hours = 12, stepS = 30, minEl = 0, maxPasses = 3 } = opts;
+    if (!s0 || !s1 || !(s1.t > s0.t)) return [];
+
+    // 兩筆位置 → 慣性系向量，決定軌道面法向量與運動方向
+    const θ0 = gmst(julianDate(new Date(s0.t)));
+    const θ1 = gmst(julianDate(new Date(s1.t)));
+    const r0 = rotZ(geodeticToEcef(s0.lat, s0.lng, s0.altKm * 1000), θ0);
+    const r1 = rotZ(geodeticToEcef(s1.lat, s1.lng, s1.altKm * 1000), θ1);
+    const nvec = vcross(r0, r1);
+    if (vlen(nvec) < 1e-9 * vlen(r0) * vlen(r1)) return [];   // 同一點，方向未知
+    const n = vnorm(nvec);
+    const ω = Math.sqrt(MU_EARTH / Math.pow(vlen(r0), 3));    // rad/s（圓軌道）
+
+    const passes = [];
+    let cur = null, prevT = s1.t;
+    for (let s = 0; s <= hours * 3600; s += stepS) {
+      const t = s1.t + s * 1000;
+      const eci = vrotate(r0, n, ω * (t - s0.t) / 1000);
+      const ecef = rotZ(eci, -gmst(julianDate(new Date(t))));
+      const la = lookAnglesEcef(obs, ecef);
+      if (la.el >= minEl) {
+        if (!cur) cur = { start: t, maxEl: -90 };
+        if (la.el > cur.maxEl) { cur.maxEl = la.el; cur.maxAz = la.az; cur.maxT = t; }
+      } else if (cur) {
+        cur.end = prevT;
+        cur.maxEl = Math.round(cur.maxEl * 10) / 10;
+        passes.push(cur);
+        cur = null;
+        if (passes.length >= maxPasses) break;
+      }
+      prevT = t;
+    }
+    if (cur) { cur.end = prevT; cur.maxEl = Math.round(cur.maxEl * 10) / 10; passes.push(cur); }
+    return passes;
+  }
+
   global.Sky = {
     skyObjects, eclipticPath, constellationLines, centroid,
     julianDate, gmst, lst, obliquity,
-    sunEqu, moonEqu, planetEqu, equToHor, eclToEqu, geodeticToEcef, lookAngles,
+    sunEqu, moonEqu, planetEqu, equToHor, eclToEqu, geodeticToEcef,
+    lookAngles, lookAnglesEcef, predictPasses,
     PLANETS, STARS, STAR_BY_KEY, CONSTELLATIONS, CONSTELLATION_KEYS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);
